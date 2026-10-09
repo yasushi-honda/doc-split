@@ -151,6 +151,7 @@ Stage3負荷試験Phase B実測(1ページのcoldMax=33.4秒、5バースト中1
 
 - 実装計画: `/Users/yyyhhh/.claude/plans/shiny-knitting-flamingo.md`
 - [ADR-0024](0024-multi-customer-detection.md) — FAX複製機能(faxDuplication)、コスト試算のボリューム統計で多重計上排除のため参照
+- [ADR-0030](0030-paddle-ocr-image-downscale.md) — 入力画像を長辺2500pxに自動縮小(4GiBのメモリ不足対策、運用上の補足)
 - Issue #895(空確定バグ、本ADR承認と同時期に起票)
 - グローバルメモリ: `reference_japanese_ocr_model_accuracy_2026.md`(AWS Bedrock/PaddleOCRの日本語OCR精度比較)、`reference_aws_bedrock_ismap_and_pricing_2026.md`(AWS Bedrock ISMAP適合性・料金)
 

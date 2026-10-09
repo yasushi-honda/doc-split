@@ -313,6 +313,8 @@ gcloud iam service-accounts add-iam-policy-binding \
 
 **PaddleOCR障害時の運用**(ADR-0029、2026-10-06。旧「OCRのGemini(緊急手段)の運用」を置換): OCRのエンジンはPaddleOCR(自前のCloud Run)のみで、Gemini(Vertex AI)は緊急用経路も含めて廃止した。**外部AIへは逃がさない**。障害時は、①`processocr_error`アラートを起点にAIが原因とerror書類の件数を読み取って報告・提案する ②再試行を使い切った書類(一時エラーは5回目の失敗、429は8回目の失敗)は`status:'error'`に確定する(非一時エラーは即確定)。データは失われないが自動では再処理されない(自動救済は429系のみ・最大3回) ③復旧後に`fix-stuck-documents --include-errors`を`run-ops-script.yml`経由でdry-run→本実行(番号単位の承認後にAIが実行)して`pending`へ戻す ④不良リビジョンが原因の場合に限り、`gcloud run services update-traffic paddle-ocr`で直前の健全なリビジョンへ戻す(後続のデプロイにも割当てが引き継がれるため、復旧後は`--to-latest`で戻して100%を確認する)。詳細な手順と許容する停止の範囲は`services/paddle-ocr/README.md`の「PaddleOCR障害時の運用」とADR-0029を参照。`ocr_provider_override=gemini`と`OCR_PROVIDER=gemini`の宣言はデプロイ時にエラーで止まる。環境別のgcloud操作は`switch-client.sh`の手順に従う。
 
+**画像書類の`error`・503(メモリ不足)への対応**(ADR-0030、2026-10-09): `paddle-ocr`(4GiB)は、12Mpx級の画像でメモリ不足になりうる。対策として、OCRへ渡す前に画像を長辺2500pxに自動縮小している(`MAX_IMAGE_LONG_SIDE`、原本は不変)。画像書類が`error`(`PaddleOCR request failed: 503`)になったら、①`paddle-ocr`のログの`signal 9`で原因を確認 ②再処理は`fix-stuck-documents --doc-id <書類ID>`を`run-ops-script.yml`経由でdry-run→本実行(番号単位の承認後。**このスクリプトは書類名を出力しない**。リポジトリは公開でActionsのログが公開されるため、書類名・顧客名を出力する運用スクリプトを実行する前は出力内容を確認する) ③繰り返す場合は、縮小上限の引き下げまたはメモリ8GiB化を決裁者が判断する(詳細: `services/paddle-ocr/README.md`「入力の上限と画像の自動縮小」)。大判PDF(A3等)は縮小の対象外。
+
 **新規クライアント納品の前提**(PR-B): コード既定と倒れ先がpaddleになったため、納品する環境には、PaddleOCR基盤(`scripts/setup-paddle-ocr-infra.sh`とデプロイ、`<環境>.env`の`PADDLE_OCR_URL`宣言)が先に必要。現在の自動納品(`scripts/setup-tenant.sh`)はPaddleOCRを作らないため、納品後に`PADDLE_OCR_URL`が`<TBD>`のまま`deploy-functions`を実行すると、デプロイ前に停止する(OCRが全件エラーになる状態では本番に出ない)。新規テナントの予定が出た時点で、納品手順へPaddleOCR基盤の構築を組み込む。
 
 ---

@@ -151,6 +151,38 @@ trial単位の完了率もいずれのtierも100%(1p:30/30、71p:20/20、20p:20/
 
 実行方法(1回のdispatch=1 tier×1 series。71ページwarm系列単独で約175分を要するため単独実行すること): GitHub Actions「PaddleOCR Verify (ADR-0025 PR4c Stage 1/3)」を`mode=load`・`tier`・`series`・`intensity`を指定して実行する。詳細は本ファイル「運用ランブック」節参照。
 
+## 入力の上限と画像の自動縮小(2026-10-09、ADR-0030)
+
+### 入力の上限(環境変数で調整可能)
+
+| 環境変数 | 既定 | 超えたときの応答 | 備考 |
+|---|---|---|---|
+| `MAX_UPLOAD_BYTES` | 20MiB | 413 `PAYLOAD_TOO_LARGE` | リクエスト本体のバイト数 |
+| `MAX_PAGES` | 8 | 422 `PAGE_LIMIT_EXCEEDED` | PDFのページ数、TIFF/GIFのフレーム数 |
+| `MAX_PIXELS` | 40,000,000 | 422 `PIXEL_LIMIT_EXCEEDED` | 1ページ/1フレームの画素数。**縮小前の画素数で判定**(展開爆弾対策) |
+| `PADDLE_PDF_RENDER_DPI` | 200 | - | PDFのラスタライズ解像度(golden照合の前提。変えると再現性が崩れる) |
+| `MAX_IMAGE_LONG_SIDE` | **2500** | -(縮小するだけ) | **画像の長辺の上限px**。超える画像はOCRエンジンへ渡す前にアスペクト比を保って縮小する |
+| `MAX_PROCESSING_SECONDS` | 240 | 504 `PROCESSING_TIMEOUT` | 1リクエストの処理時間の予算 |
+
+Cloud Runの構成は4 vCPU・メモリ4GiB・同時実行1・min1/max3・タイムアウト300秒(`.github/workflows/deploy-paddle-ocr.yml`)。
+
+### 画像の自動縮小(`MAX_IMAGE_LONG_SIDE`)
+
+- **目的**: 12Mpx前後のスマホ写真(例: 4000x3000)で、推論中にコンテナがメモリ不足(`Container terminated on signal 9`、呼び出し側には`PaddleOCR request failed: 503`)になり、書類が`error`に確定する事象への対策。Geminiは外部APIでこの制約がなかったため、PaddleOCRへの全面切替(ADR-0025)後に表面化した。
+- **動作**: `raster.py`の`image_to_rgb`が、ピクセル数ガードを通した後、長辺が`MAX_IMAGE_LONG_SIDE`を**超える**フレームだけをアスペクト比を保って縮小する(ちょうど以下は無変更、短辺は最小1px)。複数フレームのTIFF/GIFは全フレームに適用する。
+- **縮小するのはOCRエンジンへ渡す入力だけ**。Storageの原本は変更しない。したがって原本の画質は落ちず、設定を変えて再処理もできる。
+- **PDFには適用しない**。PDFの画素数は`PADDLE_PDF_RENDER_DPI`と用紙サイズで決まる(A4・200dpiで約3.9Mpx)。**大判用紙(A3・200dpiで約7.8Mpx)は、下記の不安定な領域に近い**が、現状は対象外(実績なし)。
+- **実測(dev、4GiB、合成JPEG、実データなし)**: 約7Mpx以下は成功、7.7〜9.2Mpxは不安定(1回目503→再試行で成功)、9.7Mpx以上は確実に失敗。メモリ8GiBでは同じ画像が全て成功したため、原因は4GiBのメモリ不足(使用量そのものは未計測)。上限より大きい6種類の画像を順に送った比較では、2500pxは6件すべて1回目で成功、3000pxは6件中2件が1回目503で1件は再試行でも失敗したため、2500pxを既定にした。6件の測定で、確率の見積もりとしては粗い。
+- **精度への影響**: golden由来の画像(12件)では類似度1.000だが、goldenは大きく印字された短文で**判定力が低い**。実際の小さい文字・ブレ・影・斜めの写真は再現していない。本番で画像書類の読み取り結果を継続して確認する。
+- **処理時間**: 画像の内容で大きく変わる(文字が少ない画像で8〜13秒、数字が密な合成画像で70〜100秒)。実書類は未測定で、`MAX_PROCESSING_SECONDS`(240秒)に近づく場合は見直す。
+
+### 画像書類で503・`error`になったとき
+
+1. 症状の確認: `paddle-ocr`のログに`Container terminated on signal 9`、`processocr`のログに`PaddleOCR request failed: 503`と再試行(`Attempt N/4 failed`)が出る。
+2. 対処の選択肢(**決裁者の判断、番号単位の承認**): (a) `MAX_IMAGE_LONG_SIDE`を下げる(例: 2000)。精度への影響は未測定 (b) メモリを8GiBにする(1環境あたり月約$26の増加、Cloud Run公式単価Tier 1・リクエスト課金・最小インスタンス1台の概算で、実額は請求画面で確認)。精度への影響はない。
+3. 書類の再処理: `fix-stuck-documents --doc-id <書類ID>`を`run-ops-script.yml`経由で、まずdry-run、次に本実行。**このスクリプトは書類名を出力しない**(リポジトリは公開で、Actionsのログが公開されるため。契約テストで固定)。
+4. 診断用の道具: `paddle-ocr-image-probe.yml`(指定寸法の合成JPEGをdevへ送る)、`paddle-ocr-downscale-accuracy.yml`(goldenを画像化して縮小前後の精度を照合)。いずれもdev専用。
+
 ## 運用ランブック(PR8)
 
 ### OCRエンジンの切替(ADR-0029で整理)
