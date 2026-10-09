@@ -1,0 +1,163 @@
+name: PaddleOCR Image Probe (dev only)
+
+# kanameoneで長辺4000px超のJPEG(4080x3060)が paddle-ocr を signal 9 で落とした事象を、
+# 実データを使わずdevで再現できるか確認する読み取り専用の診断。合成JPEG(Pillow生成)を
+# 寸法別に1枚ずつ /ocr へ送り、HTTPステータスと所要時間だけを記録する。
+# スクリプト: scripts/paddle-ocr-image-probe.ts
+#
+# 設計判断(paddle-ocr-verify.ymlと同方針):
+# - concurrency groupはdeploy-paddle-ocr.yml/paddle-ocr-verify.ymlと同一にし、デプロイ・
+#   他の計測と排他にする(試験中にコンテナが落ちる=他の計測を汚染しうるため)。
+# - inputs.*/secrets.* は step-level env: 経由で変数化し、run: 内で ${{ }} を直接展開しない。
+# - devのみ。サービスはdevのPaddleOCR(min-instances=1)で、本番データには触れない。
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment(devのみ対応)'
+        required: true
+        type: choice
+        options:
+          - dev
+      sizes:
+        description: '送信する寸法(WxHのカンマ区切り)。順に1枚ずつ送る'
+        required: false
+        type: string
+        default: '3000x2250,4000x3000,4032x3024,4080x3060'
+
+concurrency:
+  group: deploy-paddle-ocr-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          SIZES: ${{ github.event.inputs.sizes }}
+        run: |
+          set -euo pipefail
+          if [ "$ENVIRONMENT" != "dev" ]; then
+            echo "ERROR: devのみ対応(got: $ENVIRONMENT)" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$SIZES" | grep -Eq '^[0-9]+[xX][0-9]+(,[0-9]+[xX][0-9]+)*$'; then
+            echo "ERROR: sizes は WxH のカンマ区切りで指定してください(got: $SIZES)" >&2
+            exit 1
+          fi
+          # 1件あたり最悪(250秒+再試行待機30秒+250秒)×6件≒53分がジョブ時間枠(75分)に収まる上限(scripts側MAX_SIZESと同値)
+          if [ "$(printf '%s' "$SIZES" | awk -F, '{print NF}')" -gt 6 ]; then
+            echo "ERROR: sizes は最大6件までです" >&2
+            exit 1
+          fi
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_DEV }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate synthetic JPEGs
+        env:
+          SIZES: ${{ github.event.inputs.sizes }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pillow
+          mkdir -p probe-images
+          python3 - <<'PY'
+          import os, random
+          from PIL import Image, ImageDraw
+          random.seed(0)
+          for spec in os.environ["SIZES"].split(","):
+              w, h = [int(x) for x in spec.lower().split("x")]
+              img = Image.new("RGB", (w, h), (250, 250, 248))
+              d = ImageDraw.Draw(img)
+              # 書類に近い見た目: 文字行を密に並べる(ラテン文字・数字。実データは使わない)
+              y = 40
+              while y < h - 40:
+                  line = " ".join(str(random.randint(100000, 999999)) for _ in range(max(w // 220, 4)))
+                  d.text((40, y), line, fill=(20, 20, 20))
+                  y += 22
+              img.save(f"probe-images/{w}x{h}.jpg", "JPEG", quality=85)
+          PY
+          ls -l probe-images
+
+      - name: Run image probe
+        id: run_probe
+        env:
+          SIZES: ${{ github.event.inputs.sizes }}
+        run: |
+          set +e
+          # ログ収集をこの実行の時間窓に限定するため、送信開始時刻を記録する(他のdevリクエスト由来の
+          # max_side_limit/signal 9を拾って誤って「再現した」と読めないようにする)。
+          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          npx ts-node scripts/paddle-ocr-image-probe.ts --dir=probe-images --sizes="$SIZES" --out=paddle-ocr-image-probe.json
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Collect paddle-ocr container logs (dev)
+        if: always()
+        env:
+          PROBE_STARTED_AT: ${{ steps.run_probe.outputs.started_at }}
+        run: |
+          set +e
+          if [ -z "$PROBE_STARTED_AT" ]; then
+            echo "probe開始時刻が記録されていないため、ログ収集をスキップします" | tee paddle-ocr-image-probe-logs.txt
+            exit 0
+          fi
+          gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"paddle-ocr\" AND timestamp>=\"${PROBE_STARTED_AT}\" AND (textPayload:\"max_side_limit\" OR textPayload:\"signal 9\")" \
+            --project=doc-split-dev --limit=50 --format="value(timestamp,textPayload)" \
+            > paddle-ocr-image-probe-logs.txt 2>&1
+          echo "--- max_side_limit / signal 9 lines: $(wc -l < paddle-ocr-image-probe-logs.txt)"
+          cat paddle-ocr-image-probe-logs.txt | cut -c1-200
+
+      - name: Step Summary
+        if: always()
+        run: |
+          if [ -f paddle-ocr-image-probe.json ]; then
+            {
+              echo '### PaddleOCR image probe'
+              echo '```json'
+              cat paddle-ocr-image-probe.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paddle-ocr-image-probe-report
+          path: |
+            paddle-ocr-image-probe.json
+            paddle-ocr-image-probe-logs.txt
+          if-no-files-found: warn
+
+      - name: Fail job if probe script reported non-zero exit
+        if: always()
+        env:
+          PROBE_EXIT_CODE: ${{ steps.run_probe.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          if [ "${PROBE_EXIT_CODE:-1}" != "0" ]; then
+            echo "ERROR: paddle-ocr-image-probe.ts が非ゼロ終了しました(exit_code=${PROBE_EXIT_CODE:-unknown})" >&2
+            exit 1
+          fi
+          echo "OK: probe は正常終了しました(再現の有無は verdict を確認)"
