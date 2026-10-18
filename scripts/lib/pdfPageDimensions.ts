@@ -6,6 +6,8 @@
  * 後のPDFを測るため、Pagesツリーから継承したMediaBox等が抽出で失われる場合も反映される。
  *
  * 画素数は `services/paddle-ocr/raster.py` の式(幅・高さを個別に切り捨ててから掛ける)に合わせる。
+ * PDFiumは寸法をfloat32で扱うため、座標をMath.froundでfloat32に丸めてから幅・高さを求める
+ * (40Mpx上限付近では、double計算と判定が食い違うことがある)。
  * ただし本番のレンダラ(pypdfium2)がUserUnitを反映するかは確認していないため、UserUnitは
  * 値だけ記録し、画素数の計算には使わない。
  *
@@ -128,7 +130,13 @@ async function measureSinglePagePdf(singlePage: Buffer, pageNumber: number, dpi:
     effectiveHeightPt,
     rotation: page.getRotation().angle,
     userUnit: userUnitObj ? userUnitObj.asNumber() : null,
-    pixels: pixelsAtDpi(effectiveWidthPt, effectiveHeightPt, dpi),
+    // 本番のPDFium(pypdfium2のget_size)は寸法をfloat32で返すため、画素数だけfloat32相当で計算する。
+    // 表示用の寸法(effective*Pt)は元の値のまま。上限(40Mpx)付近でのみ結果が変わる
+    pixels: pixelsAtDpi(
+      Math.fround(Math.fround(right) - Math.fround(left)),
+      Math.fround(Math.fround(top) - Math.fround(bottom)),
+      dpi
+    ),
     singlePageBytes: singlePage.length,
   };
 }

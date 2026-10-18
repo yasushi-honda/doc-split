@@ -44,6 +44,17 @@ test('measurePdfPages: 回転は画素数を変えず、角度を記録する', 
   assert.equal(pages[0].pixels, 1652 * 2338);
 });
 
+test('measurePdfPages: 画素数はPDFium同様float32相当の寸法で計算する(40Mpx上限付近でdouble計算と食い違うページ)', async () => {
+  // 1890.73 x 2742.12 pt @200dpi: doubleだと5252x7616=39,999,232だが、float32では5252x7617=40,004,484(上限超え)。
+  // 期待値はraster.pyの式をfloat32の寸法でPython実測した値
+  const { pages, maxPixels } = await measurePdfPages(await buildPdf([[1890.73, 2742.12]]), 200);
+  assert.equal(pages[0].pixels, 5252 * 7617);
+  assert.equal(maxPixels, 40_004_484);
+  assert.ok(maxPixels > 40_000_000);
+  // 表示用の寸法は元の値のまま(float32の誤差を見せない)
+  assert.equal(pages[0].effectiveWidthPt, 1890.73);
+});
+
 test('measurePdfPages: CropBoxがMediaBoxより小さければCropBoxで測る', async () => {
   const pdf = await buildPdf([[842, 1191]], (doc) => doc.getPage(0).setCropBox(0, 0, 595, 842));
   const { pages } = await measurePdfPages(pdf, 200);
