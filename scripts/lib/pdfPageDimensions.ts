@@ -11,7 +11,6 @@
  */
 
 import { PDFDocument, PDFName, PDFNumber } from 'pdf-lib';
-import { extractAllPdfPages } from './pdfPages';
 
 export interface PageDimensions {
   mediaWidthPt: number;
@@ -41,6 +40,14 @@ const DOC_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 export function pixelsAtDpi(widthPt: number, heightPt: number, dpi: number): number {
   const scale = dpi / 72;
   return Math.floor(widthPt * scale) * Math.floor(heightPt * scale);
+}
+
+/** 本番(functions/src/ocr/ocrProcessor.ts の extractPdfPage)と同じ方法で、ロード済みPDFから1ページを抽出する */
+async function extractSinglePage(source: PDFDocument, pageIndex: number): Promise<Buffer> {
+  const single = await PDFDocument.create();
+  const [copied] = await single.copyPages(source, [pageIndex]);
+  single.addPage(copied);
+  return Buffer.from(await single.save());
 }
 
 async function measureSinglePagePdf(singlePage: Buffer, dpi: number): Promise<PageDimensions> {
@@ -74,13 +81,15 @@ async function measureSinglePagePdf(singlePage: Buffer, dpi: number): Promise<Pa
 }
 
 export async function measurePdfPages(pdfBuffer: Buffer, dpi: number): Promise<PdfDimensionsResult> {
-  const singlePages = await extractAllPdfPages(pdfBuffer);
-  if (singlePages.length === 0) {
+  const source = await PDFDocument.load(pdfBuffer);
+  const pageCount = source.getPageCount();
+  if (pageCount === 0) {
     throw new Error('PDFにページが含まれていません');
   }
   const pages: PageDimensions[] = [];
-  for (const single of singlePages) {
-    pages.push(await measureSinglePagePdf(single, dpi));
+  for (let i = 0; i < pageCount; i++) {
+    // 共有画像が各ページに複製されるため、全ページ分を保持せず1ページずつ抽出して測る
+    pages.push(await measureSinglePagePdf(await extractSinglePage(source, i), dpi));
   }
   return {
     pageCount: pages.length,

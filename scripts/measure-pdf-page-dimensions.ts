@@ -49,7 +49,8 @@ function pathIfBucketMatches(url: unknown, bucket: string): string | null {
 }
 
 async function measureOne(docId: string, bucketName: string, dpi: number): Promise<boolean> {
-  const snap = await admin.firestore().collection('documents').doc(docId).select('fileUrl').get();
+  const db = admin.firestore();
+  const [snap] = await db.getAll(db.collection('documents').doc(docId), { fieldMask: ['fileUrl'] });
   if (!snap.exists) {
     console.log(`doc=${docId} status=not_found`);
     return false;
