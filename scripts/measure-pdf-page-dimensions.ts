@@ -7,7 +7,7 @@
  * ローカルにはPDFを持ち込まない。
  *
  * 使用方法(FIREBASE_PROJECT_ID・STORAGE_BUCKETは必須):
- *   --doc-ids id1,id2,...,id10   対象の書類ID(1〜10件)
+ *   --target-ids id1,id2,...,id10   対象の書類ID(1〜10件)
  *   --dpi N                      画素数の計算に使うdpi(既定200、paddle-ocrのPADDLE_PDF_RENDER_DPIに合わせる)
  *
  * 出力: 書類IDごとのページ数・ページ別の寸法(pt)・回転・画素数・1ページ抽出後のバイト数。
@@ -33,11 +33,11 @@ function parseArgs(argv: string[]): CliOptions {
   let docIdsCsv: string | null = null;
   let dpi = DEFAULT_DPI;
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--doc-ids') docIdsCsv = argv[++i] ?? '';
+    if (argv[i] === '--target-ids') docIdsCsv = argv[++i] ?? '';
     else if (argv[i] === '--dpi') dpi = Number(argv[++i]);
     else throw new Error(`不明な引数: ${argv[i]}`);
   }
-  if (docIdsCsv === null) throw new Error('--doc-ids は必須です');
+  if (docIdsCsv === null) throw new Error('--target-ids は必須です');
   if (!Number.isInteger(dpi) || dpi < 1 || dpi > 1200) throw new Error('--dpi は1〜1200の整数');
   return { docIds: parseDocIds(docIdsCsv), dpi };
 }

@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { PDFArray, PDFDocument, PDFName, PDFNumber, degrees } from 'pdf-lib';
 import { measurePdfPages, parseDocIds, pixelsAtDpi } from './pdfPageDimensions';
@@ -89,4 +91,13 @@ test('parseDocIds: 空・11件・不正文字・空要素は拒否(境界値)', 
   const ten = Array.from({ length: 10 }, (_, i) => `d${i}`).join(',');
   assert.equal(parseDocIds(ten).length, 10);
   assert.throws(() => parseDocIds(`${ten},d10`));
+});
+
+test('ワークフロー契約: 測定スクリプトの引数は汎用の--doc-id分岐(部分一致)に当たらない名前である', () => {
+  const workflow = readFileSync(join(__dirname, '../../.github/workflows/run-ops-script.yml'), 'utf8');
+  const options = workflow.split('\n').filter((l) => l.trim().startsWith('- measure-pdf-page-dimensions'));
+  assert.ok(options.length > 0, '測定スクリプトの選択肢がワークフローに登録されている');
+  for (const line of options) {
+    assert.ok(!line.includes('--doc-id'), `汎用--doc-id分岐に部分一致する: ${line.trim()}`);
+  }
 });
