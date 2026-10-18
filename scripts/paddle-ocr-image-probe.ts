@@ -164,7 +164,13 @@ export function summarizeProbe(results: ProbeResult[]): {
   return { atOrBelow4000: low, above4000: high, verdict, caveat };
 }
 
-async function probeOne(serviceUrl: string, token: string, file: string, size: ProbeSize): Promise<ProbeResult> {
+export async function probeOne(
+  serviceUrl: string,
+  token: string,
+  file: string,
+  size: ProbeSize,
+  contentType = 'image/jpeg'
+): Promise<ProbeResult> {
   const body = fs.readFileSync(file);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -172,7 +178,7 @@ async function probeOne(serviceUrl: string, token: string, file: string, size: P
   try {
     const res = await fetch(buildOcrEndpoint(serviceUrl), {
       method: 'POST',
-      headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': contentType, Authorization: `Bearer ${token}` },
       body,
       signal: controller.signal,
     });
