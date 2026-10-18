@@ -6,6 +6,7 @@ paddleocr/paddlepaddleを一切importしない純粋モジュール(functions/sr
 PDFラスタライズはscripts/generate-paddle-ocr-golden-text.pyのrender_pdf_page_to_rgb_array()と
 完全同一手順(pypdfium2、scale=dpi/72、convert("RGB"))。この手順を変えるとgolden textの再現性が
 崩れるため、変更時は再検証必須。
+ただしpdf_max_long_sideを超えないページ(A4は200dpiで長辺2339px)は、この手順のまま一切変えない。
 """
 
 from __future__ import annotations
@@ -32,12 +33,19 @@ class RasterLimits:
     # 画像(PNG/JPEG/TIFF/GIF)の長辺の上限px。超える画像はOCRエンジンへ渡す前に、アスペクト比を保って縮小する。
     # 12Mpx前後のスマホ写真でエンジンの推論メモリが4GiBを超え、コンテナがsignal 9で強制終了する(HTTP 503)事象
     # への対策(devで合成JPEGの再現・メモリ8GiB化での解消を確認済み)。縮小するのはOCR入力のみで、
-    # 原本のバイト列は変更しない。None(既定)は従来どおり縮小しない。PDFには適用しない(PDFはdpi指定で決まる)。
+    # 原本のバイト列は変更しない。None(既定)は従来どおり縮小しない。PDFにはpdf_max_long_sideを使う。
     image_max_long_side: int | None = None
+    # PDFページの長辺の上限px。画像と同じ理由(推論メモリが4GiBを超えsignal 9)で、1ページ目だけA3横
+    # (200dpiで長辺3308px)のPDFがdevの合成PDFで3/3再現した。超えるページだけ、描画後に縮小するのではなく
+    # 最初から縮小後の倍率で描画する(縮小前の大きな配列を確保しないため)。上限以下のページは描画手順不変。
+    # None(既定)は従来どおり縮小しない。
+    pdf_max_long_side: int | None = None
 
     def __post_init__(self) -> None:
         if self.image_max_long_side is not None and self.image_max_long_side <= 0:
             raise ValueError(f"image_max_long_side は正の整数である必要があります: {self.image_max_long_side}")
+        if self.pdf_max_long_side is not None and self.pdf_max_long_side <= 0:
+            raise ValueError(f"pdf_max_long_side は正の整数である必要があります: {self.pdf_max_long_side}")
 
 
 def pdf_pages_to_rgb(data: bytes, *, dpi: int, limits: RasterLimits) -> Iterator["object"]:
@@ -86,18 +94,36 @@ def pdf_pages_to_rgb(data: bytes, *, dpi: int, limits: RasterLimits) -> Iterator
                 actual=pixel_count,
             )
 
+        render_scale = _pdf_render_scale(width_pt, height_pt, dpi=dpi, max_long_side=limits.pdf_max_long_side)
+
         try:
             # silent-failure-hunter指摘反映: pypdfium2.PdfiumErrorはRuntimeErrorの
             # サブクラス(実機確認済み)のため、ここを無保護にするとapp.py側の
             # except RuntimeErrorに捕まり、入力由来の問題が500(エンジン異常)として
             # 誤分類される。ページ単位のレンダリング失敗も422/INVALID_PDFに変換する。
-            bitmap = page.render(scale=scale)
+            bitmap = page.render(scale=render_scale)
             pil_image = bitmap.to_pil()
             rgb_array = np.array(pil_image.convert("RGB"))
         except pdfium.PdfiumError as e:
             raise InputRejected("INVALID_PDF", f"ページ{i + 1}のレンダリングに失敗しました: {e}") from e
 
         yield rgb_array
+
+
+def _pdf_render_scale(width_pt: float, height_pt: float, *, dpi: int, max_long_side: int | None) -> float:
+    """PDFページの描画倍率。長辺がmax_long_sideを超えるページだけ、長辺がちょうど上限に収まる倍率にする。
+
+    上限以下のページはdpi/72のまま(従来と完全に同じ)。pypdfium2は寸法をceilで丸めるため、上限を超える
+    場合は(上限-0.5)/長辺ptとし、浮動小数の誤差で長辺が上限+1pxにならないようにする。
+    """
+    scale = dpi / 72
+    if max_long_side is None:
+        return scale
+    long_side_pt = max(width_pt, height_pt)
+    # 長辺px = long_side_pt * dpi / 72。除算を避けて比較し、ちょうど上限(例: 900pt@200dpi=2500px)を誤判定しない
+    if long_side_pt * dpi <= max_long_side * 72:
+        return scale
+    return (max_long_side - 0.5) / long_side_pt
 
 
 def image_to_rgb(data: bytes, *, limits: RasterLimits) -> Iterator["object"]:

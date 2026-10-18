@@ -468,6 +468,28 @@ def test_ocr_downscales_large_jpeg_before_engine(client, monkeypatch):
     assert engine.shapes == [(225, 300)]
 
 
+def test_ocr_downscales_large_pdf_page_before_engine(client):
+    """A3横のPDFページは、エンジンへ渡る前に長辺が上限(既定2500px)まで縮小される。A4は縮小されない。"""
+    engine = StubEngine(texts_by_call=["ok"])
+    app_module.ENGINE = engine
+    a3 = _make_pdf_bytes(1, width=1191, height=842)
+    resp = client.post("/ocr", content=a3, headers={"content-type": "application/pdf"})
+    assert resp.status_code == 200
+    assert max(engine.shapes[0]) == 2500
+
+    engine.shapes.clear()
+    a4 = _make_pdf_bytes(1, width=595, height=842)
+    resp = client.post("/ocr", content=a4, headers={"content-type": "application/pdf"})
+    assert resp.status_code == 200
+    assert engine.shapes == [(2339, 1653)]
+
+
+def test_default_limits_cap_pdf_long_side_at_2500():
+    """本番既定: PDFページの長辺上限は画像と同じ2500px。環境変数MAX_PDF_LONG_SIDEで変更・無効化(大きな値)できる。"""
+    assert app_module.MAX_PDF_LONG_SIDE == 2500
+    assert app_module.LIMITS.pdf_max_long_side == 2500
+
+
 def test_default_limits_cap_image_long_side_at_2500():
     """本番既定: 画像の長辺上限は2500px。devで4GiBのまま、上限2500pxは6件すべて1回目で成功し、
     3000pxは6件中2件が1回目503(1件は再試行でも失敗)だったため、安定した2500pxを採用した。"""
