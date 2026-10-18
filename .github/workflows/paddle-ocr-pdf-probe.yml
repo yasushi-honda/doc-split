@@ -1,0 +1,207 @@
+name: PaddleOCR PDF Probe (dev only)
+
+# kanameoneで1ページ目だけがA3横(1191x842pt、200dpiで約773万画素)のPDFが paddle-ocr を
+# signal 9 で落とした事象を、実データを使わずdevで再現できるか確認する読み取り専用の診断。
+# 合成PDF(Pillow生成、1ページ目だけ指定寸法・以降はA4の4ページ)を寸法別に1つずつ /ocr へ送り、
+# HTTPステータスと所要時間だけを記録する。画像入力には長辺2500pxへの縮小があるがPDFには無い。
+# スクリプト: scripts/paddle-ocr-pdf-probe.ts
+#
+# 設計判断(paddle-ocr-verify.ymlと同方針):
+# - concurrency groupはdeploy-paddle-ocr.yml/paddle-ocr-verify.ymlと同一にし、デプロイ・
+#   他の計測と排他にする(試験中にコンテナが落ちる=他の計測を汚染しうるため)。
+# - inputs.*/secrets.* は step-level env: 経由で変数化し、run: 内で ${{ }} を直接展開しない。
+# - devのみ。サービスはdevのPaddleOCR(min-instances=1)で、本番データには触れない。
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment(devのみ対応)'
+        required: true
+        type: choice
+        options:
+          - dev
+      cases:
+        description: '1ページ目の寸法pt(WxHのカンマ区切り)。以降のページはA4(595x842)。小さい順に1つずつ送る'
+        required: false
+        type: string
+        default: '595x842,704x1000,1191x842'
+
+concurrency:
+  group: deploy-paddle-ocr-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          CASES: ${{ github.event.inputs.cases }}
+        run: |
+          set -euo pipefail
+          if [ "$ENVIRONMENT" != "dev" ]; then
+            echo "ERROR: devのみ対応(got: $ENVIRONMENT)" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$CASES" | grep -Eq '^[0-9]+[xX][0-9]+(,[0-9]+[xX][0-9]+)*$'; then
+            echo "ERROR: cases は WxH のカンマ区切りで指定してください(got: $CASES)" >&2
+            exit 1
+          fi
+          # 1件あたり最悪(250秒+再試行待機30秒+250秒)×6件≒53分がジョブ時間枠(75分)に収まる上限(scripts側parseSizesのMAX_SIZESと同値)
+          if [ "$(printf '%s' "$CASES" | awk -F, '{print NF}')" -gt 6 ]; then
+            echo "ERROR: cases は最大6件までです" >&2
+            exit 1
+          fi
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_DEV }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate synthetic PDFs
+        env:
+          CASES: ${{ github.event.inputs.cases }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pillow
+          mkdir -p probe-pdfs
+          python3 - <<'PY'
+          import os, random
+          from PIL import Image, ImageDraw
+          random.seed(0)
+          DPI = 200
+          A4 = (595, 842)
+
+          def page(w_pt, h_pt):
+              # 200dpiで描画した画像を resolution=200 でPDF化すると、ページ寸法が w_pt x h_pt になる
+              # 切り捨て: scripts/paddle-ocr-pdf-probe.ts の pixelsAtDpi(int(幅pt*scale)*int(高さpt*scale))と一致させる
+              w, h = int(w_pt * DPI / 72), int(h_pt * DPI / 72)
+              img = Image.new("RGB", (w, h), (250, 250, 248))
+              d = ImageDraw.Draw(img)
+              # 書類に近い見た目: 文字行を密に並べる(ラテン文字・数字。実データは使わない)
+              y = 40
+              while y < h - 40:
+                  line = " ".join(str(random.randint(100000, 999999)) for _ in range(max(w // 220, 4)))
+                  d.text((40, y), line, fill=(20, 20, 20))
+                  y += 22
+              return img
+
+          for spec in os.environ["CASES"].split(","):
+              w_pt, h_pt = [int(x) for x in spec.lower().split("x")]
+              pages = [page(w_pt, h_pt)] + [page(*A4) for _ in range(3)]
+              pages[0].save(f"probe-pdfs/{w_pt}x{h_pt}pt.pdf", "PDF", resolution=DPI, save_all=True, append_images=pages[1:])
+          PY
+          # 生成したPDFが意図どおりか検証する(ページ数4、1ページ目のMediaBoxが指定寸法の±1pt以内)。
+          # 200dpiの整数pxへ切り捨てて生成するため、MediaBoxは指定より最大0.36pt小さくなる。
+          python3 - <<'PY'
+          import os, re
+          for spec in os.environ["CASES"].split(","):
+              w_pt, h_pt = [int(x) for x in spec.lower().split("x")]
+              data = open(f"probe-pdfs/{w_pt}x{h_pt}pt.pdf", "rb").read()
+              pages = len(re.findall(rb"/Type\s*/Page\b", data))
+              boxes = re.findall(rb"/MediaBox\s*\[\s*0\s+0\s+([0-9.]+)\s+([0-9.]+)\s*\]", data)
+              if pages != 4 or not boxes:
+                  raise SystemExit(f"ERROR: {spec}: ページ数={pages}(想定4) MediaBox={len(boxes)}件")
+              mw, mh = float(boxes[0][0]), float(boxes[0][1])
+              if abs(mw - w_pt) > 1 or abs(mh - h_pt) > 1:
+                  raise SystemExit(f"ERROR: {spec}: 1ページ目のMediaBox={mw}x{mh}pt(指定と1pt超ずれ)")
+              print(f"OK {spec}pt: pages={pages} firstMediaBox={mw}x{mh}pt")
+          PY
+          ls -l probe-pdfs
+
+      - name: Run PDF probe
+        id: run_probe
+        env:
+          CASES: ${{ github.event.inputs.cases }}
+        run: |
+          set +e
+          # ログ収集をこの実行の時間窓に限定するため、送信開始時刻を記録する(他のdevリクエスト由来の
+          # signal 9を拾って誤って「再現した」と読めないようにする)。
+          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          npx ts-node scripts/paddle-ocr-pdf-probe.ts --dir=probe-pdfs --cases="$CASES" --out=paddle-ocr-pdf-probe.json
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Collect paddle-ocr container logs (dev)
+        if: always()
+        env:
+          PROBE_STARTED_AT: ${{ steps.run_probe.outputs.started_at }}
+        run: |
+          set +e
+          if [ -z "$PROBE_STARTED_AT" ]; then
+            echo "probe開始時刻が記録されていないため、ログ収集をスキップします" | tee paddle-ocr-pdf-probe-logs.txt
+            exit 0
+          fi
+          # Cloud Loggingへの反映遅延で、直後に読むと取りこぼしやすいため待つ
+          sleep 30
+          # stderrは別ファイルへ分ける(エラー文を「signal 9の行」として数えないため)
+          gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"paddle-ocr\" AND timestamp>=\"${PROBE_STARTED_AT}\" AND textPayload:\"signal 9\"" \
+            --project=doc-split-dev --limit=50 --format="value(timestamp,textPayload)" \
+            > paddle-ocr-pdf-probe-logs.txt 2> paddle-ocr-pdf-probe-logs.err
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "LOG_COLLECTION_FAILED exit=$rc" | tee paddle-ocr-pdf-probe-logs.txt
+            head -c 300 paddle-ocr-pdf-probe-logs.err >&2
+            echo "ERROR: ログ収集に失敗しました。signal 9 の有無は判定できません" >&2
+            exit 1
+          fi
+          echo "--- signal 9 lines: $(wc -l < paddle-ocr-pdf-probe-logs.txt)"
+          cut -c1-200 paddle-ocr-pdf-probe-logs.txt
+
+      - name: Step Summary
+        if: always()
+        run: |
+          if [ -f paddle-ocr-pdf-probe.json ]; then
+            VERDICT=$(jq -r '.summary.verdict' paddle-ocr-pdf-probe.json)
+            {
+              echo "### PaddleOCR PDF probe: ${VERDICT}"
+              echo "- failedCases: $(jq -c '.summary.failedCases' paddle-ocr-pdf-probe.json)"
+              echo "- recoveredCases(1回目失敗→再試行で成功): $(jq -c '.summary.recoveredCases' paddle-ocr-pdf-probe.json)"
+              echo "- rejectedCases(入力拒否、OCR未実行): $(jq -c '.summary.rejectedCases' paddle-ocr-pdf-probe.json)"
+              echo '```json'
+              cat paddle-ocr-pdf-probe.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [ "$VERDICT" != "NO_FAILURE" ]; then
+              echo "::warning title=PaddleOCR PDF probe::verdict=${VERDICT}(NO_FAILUREではありません。Step Summaryを確認してください)"
+            fi
+          fi
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paddle-ocr-pdf-probe-report
+          path: |
+            paddle-ocr-pdf-probe.json
+            paddle-ocr-pdf-probe-logs.txt
+          if-no-files-found: warn
+
+      - name: Fail job if probe script reported non-zero exit
+        if: always()
+        env:
+          PROBE_EXIT_CODE: ${{ steps.run_probe.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          if [ "${PROBE_EXIT_CODE:-1}" != "0" ]; then
+            echo "ERROR: paddle-ocr-pdf-probe.ts が非ゼロ終了しました(exit_code=${PROBE_EXIT_CODE:-unknown})" >&2
+            exit 1
+          fi
+          echo "OK: probe は正常終了しました(再現の有無は verdict を確認)"
