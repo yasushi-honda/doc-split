@@ -484,6 +484,20 @@ def test_ocr_downscales_large_pdf_page_before_engine(client):
     assert engine.shapes == [(2339, 1653)]
 
 
+def test_ocr_scales_each_pdf_page_by_its_own_size(client):
+    """実害の形(1ページ目だけA3横、以降はA4)を/ocr経由で確認する。倍率はページごとに決まる。"""
+    pdf = pdfium.PdfDocument.new()
+    for width, height in [(1191, 842), (595, 842), (595, 842)]:
+        pdf.new_page(width, height)
+    buf = io.BytesIO()
+    pdf.save(buf)
+    engine = StubEngine(texts_by_call=["ok"])
+    app_module.ENGINE = engine
+    resp = client.post("/ocr", content=buf.getvalue(), headers={"content-type": "application/pdf"})
+    assert resp.status_code == 200
+    assert [max(s) for s in engine.shapes] == [2500, 2339, 2339]
+
+
 def test_default_limits_cap_pdf_long_side_at_2500():
     """本番既定: PDFページの長辺上限は画像と同じ2500px。環境変数MAX_PDF_LONG_SIDEで変更・無効化(大きな値)できる。"""
     assert app_module.MAX_PDF_LONG_SIDE == 2500

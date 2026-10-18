@@ -11,8 +11,12 @@ PDFラスタライズはscripts/generate-paddle-ocr-golden-text.pyのrender_pdf_
 
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass
 from typing import Iterator
+
+logger = logging.getLogger("paddle-ocr.raster")
 
 
 class InputRejected(Exception):
@@ -36,7 +40,7 @@ class RasterLimits:
     # 原本のバイト列は変更しない。None(既定)は従来どおり縮小しない。PDFにはpdf_max_long_sideを使う。
     image_max_long_side: int | None = None
     # PDFページの長辺の上限px。画像と同じ理由(推論メモリが4GiBを超えsignal 9)で、1ページ目だけA3横
-    # (200dpiで長辺3308px)のPDFがdevの合成PDFで3/3再現した。超えるページだけ、描画後に縮小するのではなく
+    # (200dpiで長辺3309px)のPDFがdevの合成PDFで3/3再現した。超えるページだけ、描画後に縮小するのではなく
     # 最初から縮小後の倍率で描画する(縮小前の大きな配列を確保しないため)。上限以下のページは描画手順不変。
     # None(既定)は従来どおり縮小しない。
     pdf_max_long_side: int | None = None
@@ -95,6 +99,17 @@ def pdf_pages_to_rgb(data: bytes, *, dpi: int, limits: RasterLimits) -> Iterator
             )
 
         render_scale = _pdf_render_scale(width_pt, height_pt, dpi=dpi, max_long_side=limits.pdf_max_long_side)
+        if render_scale != dpi / 72:
+            # 縮小したページは、応答のrenderDpi(設定値)と実効解像度が食い違うため、ログで検知できるようにする
+            # (書類名・内容は含めない。ページ番号と寸法だけ)。
+            logger.info(
+                "PDF_PAGE_DOWNSCALED: ページ%d 長辺%dpx→%dpx 実効約%.0fdpi(設定%ddpi)",
+                i + 1,
+                math.ceil(max(width_pt, height_pt) * dpi / 72),
+                limits.pdf_max_long_side,
+                render_scale * 72,
+                dpi,
+            )
 
         try:
             # silent-failure-hunter指摘反映: pypdfium2.PdfiumErrorはRuntimeErrorの

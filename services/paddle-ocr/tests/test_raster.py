@@ -222,7 +222,7 @@ def test_raster_limits_rejects_non_positive_image_max_long_side():
 
 
 # --- PDFページの長辺上限(pdf_max_long_side) -------------------------------------------------
-# 画像入力には長辺上限があるがPDFには無く、1ページ目だけA3横(200dpiで長辺3308px)のPDFが
+# 画像入力には長辺上限があるがPDFには無く、1ページ目だけA3横(200dpiで長辺3309px)のPDFが
 # コンテナをsignal 9で落とした(dev合成PDFで3/3再現)。上限を超えるページだけ、最初から縮小後の倍率で描画する。
 
 
@@ -295,3 +295,72 @@ def test_raster_limits_rejects_non_positive_pdf_max_long_side():
         RasterLimits(max_pages=8, max_pixels=40_000_000, pdf_max_long_side=0)
     with pytest.raises(ValueError):
         RasterLimits(max_pages=8, max_pixels=40_000_000, pdf_max_long_side=-1)
+
+
+def _make_mixed_pdf_bytes(sizes: list[tuple[float, float]], *, rotation: int = 0) -> bytes:
+    """ページごとに寸法が違うPDF。rotationが0以外なら全ページに回転を設定する。"""
+    pdf = pdfium.PdfDocument.new()
+    for width, height in sizes:
+        page = pdf.new_page(width, height)
+        if rotation:
+            page.set_rotation(rotation)
+    buf = io.BytesIO()
+    pdf.save(buf)
+    return buf.getvalue()
+
+
+def test_pdf_mixed_page_sizes_are_scaled_per_page():
+    """実害の形: 1ページ目だけA3横で、以降はA4。倍率はページごとに決まり、A4ページは縮小されない。"""
+    pdf_bytes = _make_mixed_pdf_bytes([(1191, 842), (595, 842), (595, 842), (1191, 842)])
+    shapes = _pdf_shapes(pdf_bytes, max_long_side=2500)
+    assert [max(s[:2]) for s in shapes] == [2500, 2339, 2339, 2500]
+    assert shapes[1] == (2339, 1653, 3)
+
+
+def test_pdf_rotated_page_is_limited_by_rotated_long_side():
+    """/Rotate 90のA3横は縦長として描画され、回転後の長辺が上限に収まる(get_size()が回転後の寸法を返す前提の固定)。"""
+    (shape,) = _pdf_shapes(_make_mixed_pdf_bytes([(1191, 842)], rotation=90), max_long_side=2500)
+    assert shape[0] == 2500
+    assert shape[1] < shape[0]
+
+
+# 5000pt(200dpiで約23Mpx)まで。それ以上はMAX_PIXELS(40Mpx)が縮小より先に拒否する
+@pytest.mark.parametrize("long_side_pt", [901, 1000, 1191, 3000, 5000])
+def test_pdf_scaled_long_side_never_exceeds_limit(long_side_pt):
+    """縮小したページの長辺はちょうど上限に収まる(pypdfium2の丸め挙動の変化を検知するための回帰テスト)。"""
+    (shape,) = _pdf_shapes(_make_pdf_bytes(1, width=long_side_pt, height=600), max_long_side=2500)
+    assert max(shape[:2]) == 2500
+
+
+def test_pdf_page_just_below_long_side_limit_is_not_resized():
+    """899pt@200dpi=2497px。上限未満は無変更。"""
+    pdf_bytes = _make_pdf_bytes(1, width=899, height=600)
+    assert _pdf_shapes(pdf_bytes, max_long_side=2500) == _pdf_shapes(pdf_bytes, max_long_side=None)
+
+
+def test_pdf_fractional_point_size_just_over_limit_is_resized():
+    """小数ptの寸法(900.4pt@200dpi=2501.1px)も上限を超えれば縮小される。"""
+    (shape,) = _pdf_shapes(_make_pdf_bytes(1, width=900.4, height=600), max_long_side=2500)
+    assert shape[1] == 2500
+
+
+def test_pdf_long_side_boundary_follows_dpi():
+    """上限判定は渡されたdpiに従う。150dpiでは1200ptがちょうど2500px(無変更)、1201ptは縮小。"""
+    exact = _make_pdf_bytes(1, width=1200, height=800)
+    over = _make_pdf_bytes(1, width=1201, height=800)
+    assert _pdf_shapes(exact, max_long_side=2500, dpi=150) == _pdf_shapes(exact, max_long_side=None, dpi=150)
+    assert _pdf_shapes(exact, max_long_side=2500, dpi=150)[0][1] == 2500
+    assert _pdf_shapes(over, max_long_side=2500, dpi=150)[0][1] == 2500
+    assert _pdf_shapes(over, max_long_side=None, dpi=150)[0][1] == 2503
+
+
+def test_pdf_downscale_is_logged_only_for_resized_pages(caplog):
+    """縮小したページだけログに残す(A4は残さない)。書類名などは含めずページ番号と寸法のみ。"""
+    pdf_bytes = _make_mixed_pdf_bytes([(595, 842), (1191, 842)])
+    limits = RasterLimits(max_pages=8, max_pixels=40_000_000, pdf_max_long_side=2500)
+    with caplog.at_level("INFO", logger="paddle-ocr.raster"):
+        list(pdf_pages_to_rgb(pdf_bytes, dpi=200, limits=limits))
+    messages = [r.getMessage() for r in caplog.records if "PDF_PAGE_DOWNSCALED" in r.getMessage()]
+    assert len(messages) == 1
+    assert "ページ2" in messages[0]
+    assert "3309px→2500px" in messages[0]

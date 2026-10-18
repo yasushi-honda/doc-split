@@ -54,7 +54,7 @@ MAX_PIXELS = int(os.environ.get("MAX_PIXELS", str(40_000_000)))
 # (判定力に限界あり)。0以下は起動時エラー(RasterLimitsが拒否)。
 MAX_IMAGE_LONG_SIDE = int(os.environ.get("MAX_IMAGE_LONG_SIDE", "2500"))
 # PDFページの長辺の上限px。画像と同じ理由・同じ値。画像と違いPDFは200dpiで描画するため長辺が用紙寸法で決まり、
-# 1ページ目だけA3横(長辺3308px、773万画素)のPDFがdevで3回中3回、4GiBのコンテナをsignal 9(HTTP 503)にした
+# 1ページ目だけA3横(長辺3309px、約774万画素)のPDFがdevで3回中3回、4GiBのコンテナをsignal 9(HTTP 503)にした
 # (A4=長辺2339pxと、704x1000pt=長辺2778pxは3回とも成功。dev合成PDF、実データなし)。A4は上限以下で描画手順が
 # 変わらない。A3横は長辺2500px(約151dpi相当)になる。ロールバックは環境変数で大きな値(例: 100000)を設定する。
 MAX_PDF_LONG_SIDE = int(os.environ.get("MAX_PDF_LONG_SIDE", "2500"))
