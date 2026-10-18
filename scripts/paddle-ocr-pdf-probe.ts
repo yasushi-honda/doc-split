@@ -22,7 +22,7 @@ import { hasAccessError, parseSizes, probeOne, shouldRetry, type ProbeResult, ty
 
 export interface PdfProbeArgs {
   dir: string;
-  /** 1ページ目の寸法(pt)。長辺→面積の昇順 */
+  /** 1ページ目の寸法(pt)。ProbeSize の width/height は画像プローブではpx、ここではptの意味で流用している。長辺→面積の昇順 */
   cases: ProbeSize[];
   out: string;
   url?: string;
@@ -39,7 +39,8 @@ export interface PdfProbeCase {
   wallMs: number;
   errorCode: string | null;
   attempts: number;
-  outcome: 'ok' | 'failed' | 'rejected';
+  /** recovered: 1回目が失敗(503等)し、再試行で成功した。コンテナが落ちて再起動した兆候なので、再現の証拠として数える */
+  outcome: 'ok' | 'recovered' | 'failed' | 'rejected';
 }
 
 const RENDER_DPI = 200;
@@ -77,30 +78,55 @@ export function parsePdfProbeArgs(argv: string[]): PdfProbeArgs {
 }
 
 export function toPdfProbeCase(r: ProbeResult): PdfProbeCase {
-  const outcome = r.status === 200 ? 'ok' : r.status !== null && INPUT_REJECTION_STATUSES.has(r.status) ? 'rejected' : 'failed';
+  const attempts = r.attempts ?? 1;
+  const outcome: PdfProbeCase['outcome'] =
+    r.status === 200
+      ? attempts > 1
+        ? 'recovered'
+        : 'ok'
+      : r.status !== null && INPUT_REJECTION_STATUSES.has(r.status)
+        ? 'rejected'
+        : 'failed';
   return {
     firstPagePt: `${r.width}x${r.height}`,
     pixelsAt200dpi: pixelsAtDpi(r.width, r.height),
     status: r.status,
     wallMs: r.wallMs,
     errorCode: r.errorCode,
-    attempts: r.attempts ?? 1,
+    attempts,
     outcome,
   };
 }
 
-export function summarizePdfProbe(cases: PdfProbeCase[]): { verdict: PdfProbeVerdict; failedCases: string[]; caveat: string } {
+export function summarizePdfProbe(cases: PdfProbeCase[]): {
+  verdict: PdfProbeVerdict;
+  failedCases: string[];
+  recoveredCases: string[];
+  rejectedCases: string[];
+  caveat: string;
+} {
   if (cases.length === 0) {
     throw new Error('プローブ結果が空です');
   }
-  const failedCases = cases.filter((c) => c.outcome === 'failed').map((c) => c.firstPagePt);
-  // 入力拒否(4xx)のケースはOCRが走っていないため、対照が成功していても「全ケースで失敗なし」とは言えない
-  const verdict: PdfProbeVerdict =
-    failedCases.length > 0 ? 'FAILURES' : cases.some((c) => c.outcome === 'rejected') || !cases.some((c) => c.outcome === 'ok') ? 'INCONCLUSIVE' : 'NO_FAILURE';
+  const pick = (outcome: PdfProbeCase['outcome']) => cases.filter((c) => c.outcome === outcome).map((c) => c.firstPagePt);
+  const failedCases = pick('failed');
+  const recoveredCases = pick('recovered');
+  const rejectedCases = pick('rejected');
+  const hasFailure = failedCases.length > 0 || recoveredCases.length > 0;
+  // 初回で成功した対照が無いと、画素数起因の失敗か、サービス自体の不調かを区別できない(画像プローブと同じ扱い)。
+  // 入力拒否(4xx)のケースもOCRが走っていないため、対照が成功していても「全ケースで失敗なし」とは言えない。
+  const hasControl = cases.some((c) => c.outcome === 'ok');
+  let verdict: PdfProbeVerdict;
+  if (hasFailure) {
+    verdict = hasControl ? 'FAILURES' : 'INCONCLUSIVE';
+  } else {
+    verdict = rejectedCases.length > 0 || !hasControl ? 'INCONCLUSIVE' : 'NO_FAILURE';
+  }
   const caveat =
     '合成PDF(画像化した疎な数字列)での結果。NO_FAILUREは「この合成PDFでは再現せず」の意味で、画素数起因でないことの証明ではない。' +
-    'FAILURESは同時刻のpaddle-ocrログ(signal 9)と突き合わせて確定する。';
-  return { verdict, failedCases, caveat };
+    'FAILURES(失敗または再試行で復旧したケースあり)は同時刻のpaddle-ocrログ(signal 9)と突き合わせて確定する。' +
+    'INCONCLUSIVEは、初回成功の対照が無い、または入力拒否のケースがあり、判定できない。';
+  return { verdict, failedCases, recoveredCases, rejectedCases, caveat };
 }
 
 async function main(): Promise<void> {

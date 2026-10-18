@@ -108,6 +108,22 @@ jobs:
               pages = [page(w_pt, h_pt)] + [page(*A4) for _ in range(3)]
               pages[0].save(f"probe-pdfs/{w_pt}x{h_pt}pt.pdf", "PDF", resolution=DPI, save_all=True, append_images=pages[1:])
           PY
+          # 生成したPDFが意図どおりか検証する(ページ数4、1ページ目のMediaBoxが指定寸法の±1pt以内)。
+          # 200dpiの整数pxへ切り捨てて生成するため、MediaBoxは指定より最大0.36pt小さくなる。
+          python3 - <<'PY'
+          import os, re
+          for spec in os.environ["CASES"].split(","):
+              w_pt, h_pt = [int(x) for x in spec.lower().split("x")]
+              data = open(f"probe-pdfs/{w_pt}x{h_pt}pt.pdf", "rb").read()
+              pages = len(re.findall(rb"/Type\s*/Page\b", data))
+              boxes = re.findall(rb"/MediaBox\s*\[\s*0\s+0\s+([0-9.]+)\s+([0-9.]+)\s*\]", data)
+              if pages != 4 or not boxes:
+                  raise SystemExit(f"ERROR: {spec}: ページ数={pages}(想定4) MediaBox={len(boxes)}件")
+              mw, mh = float(boxes[0][0]), float(boxes[0][1])
+              if abs(mw - w_pt) > 1 or abs(mh - h_pt) > 1:
+                  raise SystemExit(f"ERROR: {spec}: 1ページ目のMediaBox={mw}x{mh}pt(指定と1pt超ずれ)")
+              print(f"OK {spec}pt: pages={pages} firstMediaBox={mw}x{mh}pt")
+          PY
           ls -l probe-pdfs
 
       - name: Run PDF probe
@@ -133,22 +149,39 @@ jobs:
             echo "probe開始時刻が記録されていないため、ログ収集をスキップします" | tee paddle-ocr-pdf-probe-logs.txt
             exit 0
           fi
+          # Cloud Loggingへの反映遅延で、直後に読むと取りこぼしやすいため待つ
+          sleep 30
+          # stderrは別ファイルへ分ける(エラー文を「signal 9の行」として数えないため)
           gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"paddle-ocr\" AND timestamp>=\"${PROBE_STARTED_AT}\" AND textPayload:\"signal 9\"" \
             --project=doc-split-dev --limit=50 --format="value(timestamp,textPayload)" \
-            > paddle-ocr-pdf-probe-logs.txt 2>&1
+            > paddle-ocr-pdf-probe-logs.txt 2> paddle-ocr-pdf-probe-logs.err
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "LOG_COLLECTION_FAILED exit=$rc" | tee paddle-ocr-pdf-probe-logs.txt
+            head -c 300 paddle-ocr-pdf-probe-logs.err >&2
+            echo "ERROR: ログ収集に失敗しました。signal 9 の有無は判定できません" >&2
+            exit 1
+          fi
           echo "--- signal 9 lines: $(wc -l < paddle-ocr-pdf-probe-logs.txt)"
-          cat paddle-ocr-pdf-probe-logs.txt | cut -c1-200
+          cut -c1-200 paddle-ocr-pdf-probe-logs.txt
 
       - name: Step Summary
         if: always()
         run: |
           if [ -f paddle-ocr-pdf-probe.json ]; then
+            VERDICT=$(jq -r '.summary.verdict' paddle-ocr-pdf-probe.json)
             {
-              echo '### PaddleOCR PDF probe'
+              echo "### PaddleOCR PDF probe: ${VERDICT}"
+              echo "- failedCases: $(jq -c '.summary.failedCases' paddle-ocr-pdf-probe.json)"
+              echo "- recoveredCases(1回目失敗→再試行で成功): $(jq -c '.summary.recoveredCases' paddle-ocr-pdf-probe.json)"
+              echo "- rejectedCases(入力拒否、OCR未実行): $(jq -c '.summary.rejectedCases' paddle-ocr-pdf-probe.json)"
               echo '```json'
               cat paddle-ocr-pdf-probe.json
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
+            if [ "$VERDICT" != "NO_FAILURE" ]; then
+              echo "::warning title=PaddleOCR PDF probe::verdict=${VERDICT}(NO_FAILUREではありません。Step Summaryを確認してください)"
+            fi
           fi
 
       - name: Upload report artifact

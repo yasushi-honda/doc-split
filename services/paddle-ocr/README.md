@@ -181,7 +181,7 @@ Cloud Runの構成は4 vCPU・メモリ4GiB・同時実行1・min1/max3・タイ
 1. 症状の確認: `paddle-ocr`のログに`Container terminated on signal 9`、`processocr`のログに`PaddleOCR request failed: 503`と再試行(`Attempt N/4 failed`)が出る。
 2. 対処の選択肢(**決裁者の判断、番号単位の承認**): (a) `MAX_IMAGE_LONG_SIDE`を下げる(例: 2000)。精度への影響は未測定 (b) メモリを8GiBにする(1環境あたり月約$26の増加、Cloud Run公式単価Tier 1・リクエスト課金・最小インスタンス1台の概算で、実額は請求画面で確認)。精度への影響はない。
 3. 書類の再処理: `fix-stuck-documents --doc-id <書類ID>`を`run-ops-script.yml`経由で、まずdry-run、次に本実行。**このスクリプトは書類名を出力しない**(リポジトリは公開で、Actionsのログが公開されるため。契約テストで固定)。
-4. 診断用の道具: `paddle-ocr-image-probe.yml`(指定寸法の合成JPEGをdevへ送る)、`paddle-ocr-downscale-accuracy.yml`(goldenを画像化して縮小前後の精度を照合)。いずれもdev専用。
+4. 診断用の道具: `paddle-ocr-image-probe.yml`(指定寸法の合成JPEGをdevへ送る)、`paddle-ocr-pdf-probe.yml`(1ページ目だけ指定寸法の合成PDFをdevへ送る。PDFには画像のような縮小が無い)、`paddle-ocr-downscale-accuracy.yml`(goldenを画像化して縮小前後の精度を照合)。いずれもdev専用。
 
 ## 運用ランブック(PR8)
 
