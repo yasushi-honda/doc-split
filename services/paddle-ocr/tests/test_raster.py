@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 
 import numpy as np
 import pypdfium2 as pdfium
@@ -358,9 +359,11 @@ def test_pdf_downscale_is_logged_only_for_resized_pages(caplog):
     """縮小したページだけログに残す(A4は残さない)。書類名などは含めずページ番号と寸法のみ。"""
     pdf_bytes = _make_mixed_pdf_bytes([(595, 842), (1191, 842)])
     limits = RasterLimits(max_pages=8, max_pixels=40_000_000, pdf_max_long_side=2500)
-    with caplog.at_level("INFO", logger="paddle-ocr.raster"):
-        list(pdf_pages_to_rgb(pdf_bytes, dpi=200, limits=limits))
-    messages = [r.getMessage() for r in caplog.records if "PDF_PAGE_DOWNSCALED" in r.getMessage()]
-    assert len(messages) == 1
+    # ログレベルを上げずに取得する: 本番はrootロガーがWARNING(infoは出力されない)なので、WARNING以上で出ること
+    list(pdf_pages_to_rgb(pdf_bytes, dpi=200, limits=limits))
+    records = [r for r in caplog.records if "PDF_PAGE_DOWNSCALED" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno >= logging.WARNING
+    messages = [r.getMessage() for r in records]
     assert "ページ2" in messages[0]
     assert "3309px→2500px" in messages[0]

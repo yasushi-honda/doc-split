@@ -101,8 +101,9 @@ def pdf_pages_to_rgb(data: bytes, *, dpi: int, limits: RasterLimits) -> Iterator
         render_scale = _pdf_render_scale(width_pt, height_pt, dpi=dpi, max_long_side=limits.pdf_max_long_side)
         if render_scale != dpi / 72:
             # 縮小したページは、応答のrenderDpi(設定値)と実効解像度が食い違うため、ログで検知できるようにする
-            # (書類名・内容は含めない。ページ番号と寸法だけ)。
-            logger.info(
+            # (書類名・内容は含めない。ページ番号と寸法だけ)。本番(uvicorn、rootロガーはWARNING)で出力されるよう
+            # warningにする(infoは握りつぶされる)。app.pyの運用者向けイベントと同じ扱い。
+            logger.warning(
                 "PDF_PAGE_DOWNSCALED: ページ%d 長辺%dpx→%dpx 実効約%.0fdpi(設定%ddpi)",
                 i + 1,
                 math.ceil(max(width_pt, height_pt) * dpi / 72),
