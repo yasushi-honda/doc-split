@@ -245,6 +245,7 @@ on:
           - set-sarashina-summary-allowlist --remove
           - check-sarashina-summary-status
           - check-sarashina-summary-canary --canary-ids
+          - measure-pdf-page-dimensions --target-ids
           - check-sarashina-summary-canary --hours 24
           - check-sarashina-summary-canary --hours 168
           - requeue-summary-to-pending --requeue-ids
@@ -257,7 +258,7 @@ on:
         type: string
         default: ''
       doc_id:
-        description: 'Document ID (required when script contains --doc-id, set-drive-allowlist --set, or set-paddle-ocr-allowlist --set; for set-paddle-ocr-allowlist --set or set-sarashina-summary-allowlist --set, comma-separated IDs allowed (max 10); required for check-sarashina-summary-canary --canary-ids and requeue-summary-to-pending --requeue-ids (1-10 comma-separated IDs); ignored otherwise)'
+        description: 'Document ID (required when script contains --doc-id, set-drive-allowlist --set, or set-paddle-ocr-allowlist --set; for set-paddle-ocr-allowlist --set or set-sarashina-summary-allowlist --set, comma-separated IDs allowed (max 10); required for check-sarashina-summary-canary --canary-ids, measure-pdf-page-dimensions --target-ids and requeue-summary-to-pending --requeue-ids (1-10 comma-separated IDs); ignored otherwise)'
         required: false
         type: string
         default: ''
@@ -509,6 +510,20 @@ jobs:
               exit 1
             fi
             SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--canary-ids/--canary-ids $DOC_ID/")
+          fi
+
+          # measure-pdf-page-dimensions --target-ids (paddle-ocr signal 9調査、read-only)も同型。
+          # 書類のPDFを読んでページ寸法・画素数だけを出力する(書類名・パスは出さない)。
+          if [ "$SCRIPT_NAME" = "measure-pdf-page-dimensions" ] && echo "$SCRIPT_ARGS" | grep -q -- '--target-ids'; then
+            if [ -z "$DOC_ID" ]; then
+              echo "ERROR: doc_id input is required when script contains measure-pdf-page-dimensions --target-ids" >&2
+              exit 1
+            fi
+            if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+){0,9}$'; then
+              echo "ERROR: doc_id must be 1-10 comma-separated alphanumeric/underscore/hyphen IDs" >&2
+              exit 1
+            fi
+            SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--target-ids/--target-ids $DOC_ID/")
           fi
 
           # requeue-summary-to-pending --requeue-ids (PR-D canary再投入、書込み系)も同型。
@@ -1833,6 +1848,7 @@ jobs:
                [ "$SCRIPT_NAME" = "upload-sarashina-canary-fixtures" ] || \
                [ "$SCRIPT_NAME" = "diagnose-confirmed-replay-sampling" ] || \
                [ "$SCRIPT_NAME" = "check-sarashina-summary-canary" ] || \
+               [ "$SCRIPT_NAME" = "measure-pdf-page-dimensions" ] || \
                [ "$SCRIPT_NAME" = "requeue-summary-to-pending" ] || \
                [ "$SCRIPT_NAME" = "clear-unmarked-pending-summary" ] || \
                [ "$SCRIPT_NAME" = "backfill-detail-subcollection" ] || \
