@@ -1,5 +1,5 @@
 ---
-updated: 2026-10-18
+updated: 2026-10-19
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -395,7 +395,7 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**Gemini完全廃止(2026-10-10時点、本ファイル冒頭「Gemini完全廃止」節)**: 実装・3環境への展開・GCP側の無効化(`roles/aiplatform.user`剥奪・Vertex AI API無効化)・24時間ERRORログ確認(`processocr`は3環境とも0件。`paddle-ocr`の503は10/7〜10/9に集中し、以降は10/14の単発2件のみ、実害なし。2026-10-15追記参照)・kanameone/cocoroの新規書類(314件・15件)が全てPaddle処理であることの確認まで**完了**。副作用として発生したPaddleの高画素数画像のメモリ不足(kanameoneの`error`1件)も、**2026-10-09〜10に原因確定・自動縮小(長辺2500px)・3環境展開・実書類の再処理成功まで完了**(冒頭「Paddle運用上の発見」)。**残り(いずれも条件待ち)**: ①画像書類の実績確認、特にcocoro(trigger=画像書類の流入) ②`docs/client/client-setup.md`の文言の最終確認(decision-maker) ③他の運用スクリプトの書類名出力の確認(trigger=該当スクリプトの実行直前) ④大判PDF(A3等、約7.8Mpx)は縮小の対象外で不安定領域に近い(trigger=大判PDFの`error`・503)。kanameoneの`StreamGenerateContent` 54件(2026-10-04〜05、展開前)の呼び出し元は未解明だが無効化の妨げにはならない。再開時の状態確認: `gh pr list --state open`(0件のはず) / `gcloud functions describe processOCR`の`OCR_PROVIDER`(3環境とも`paddle`)。
+**Gemini完全廃止(2026-10-10時点、本ファイル冒頭「Gemini完全廃止」節)**: 実装・3環境への展開・GCP側の無効化(`roles/aiplatform.user`剥奪・Vertex AI API無効化)・24時間ERRORログ確認(`processocr`は3環境とも0件。`paddle-ocr`の503は10/7〜10/9に集中し、以降は10/14の単発2件のみ、実害なし。2026-10-15追記参照)・kanameone/cocoroの新規書類(314件・15件)が全てPaddle処理であることの確認まで**完了**。副作用として発生したPaddleの高画素数画像のメモリ不足(kanameoneの`error`1件)も、**2026-10-09〜10に原因確定・自動縮小(長辺2500px)・3環境展開・実書類の再処理成功まで完了**(冒頭「Paddle運用上の発見」)。**残り(いずれも条件待ち)**: ①画像書類の実績確認、特にcocoro(trigger=画像書類の流入) ②`docs/client/client-setup.md`の文言の最終確認(decision-maker) ③他の運用スクリプトの書類名出力の確認(trigger=該当スクリプトの実行直前) ④**大判PDFの`signal 9`は対策・3環境展開まで完了**(2026-10-18、PR #1166、冒頭の同日追記参照)。残りは2点とも条件待ち: (a)再発確認(trigger=次の定期確認。`paddle-ocr`の`Container terminated on signal 9`の有無と`PDF_PAGE_DOWNSCALED`が出たページの書類が`error`にならないか。読み取り・件数のみ) (b)A3縮小後(約151dpi相当)の読み取り精度(trigger=大判書類の読み取り結果に問題が出た時。未測定)。kanameoneの`StreamGenerateContent` 54件(2026-10-04〜05、展開前)の呼び出し元は未解明だが無効化の妨げにはならない。再開時の状態確認: `gh pr list --state open`(0件のはず) / `gcloud functions describe processOCR`の`OCR_PROVIDER`(3環境とも`paddle`)。
 
 **Geminiの通常経路停止(2026-10-03、本ファイル上部「通常経路のGemini停止」節)**: 部分着手のまま残るタスクはなし(PR-A/B/C/D0/Eはマージ・デプロイ済み、2026-10-06に完了の定義3項目を`[x]`)。残りは確認作業(PR-A cocoro・PR-B)と判断(PR-D cocoro)のみ。再開時の状態確認: `gh pr list --state open`(0件のはず) / `gcloud functions describe processOCR`の`OCR_PROVIDER`(3環境とも`paddle`) / 契約テスト`cd functions && npx mocha --require ts-node/register test/geminiSdkImportAllowlistContract.test.ts`(Node 20で実行。手元のHomebrew Nodeが26だとmochaが動かないため`PATH=/opt/homebrew/opt/node@20/bin:$PATH`)。
 
