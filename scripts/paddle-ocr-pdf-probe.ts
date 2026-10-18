@@ -33,7 +33,7 @@ export type PdfProbeVerdict = 'NO_FAILURE' | 'FAILURES' | 'INCONCLUSIVE';
 export interface PdfProbeCase {
   /** 1ページ目の寸法(pt) */
   firstPagePt: string;
-  /** 1ページ目を200dpiで描画したときの画素数(raster.pyと同じ計算) */
+  /** 1ページ目の画素数。ワークフローが生成する画像の画素数と一致する(寸法を200dpiの整数pxへ切り捨てて生成。PDFiumの描画はfloat誤差で±1px差が出うる) */
   pixelsAt200dpi: number;
   status: number | null;
   wallMs: number;
@@ -94,8 +94,9 @@ export function summarizePdfProbe(cases: PdfProbeCase[]): { verdict: PdfProbeVer
     throw new Error('プローブ結果が空です');
   }
   const failedCases = cases.filter((c) => c.outcome === 'failed').map((c) => c.firstPagePt);
-  // 入力拒否(4xx)だけではOCRが走っていないため、再現有無を言えない
-  const verdict: PdfProbeVerdict = failedCases.length > 0 ? 'FAILURES' : cases.some((c) => c.outcome === 'ok') ? 'NO_FAILURE' : 'INCONCLUSIVE';
+  // 入力拒否(4xx)のケースはOCRが走っていないため、対照が成功していても「全ケースで失敗なし」とは言えない
+  const verdict: PdfProbeVerdict =
+    failedCases.length > 0 ? 'FAILURES' : cases.some((c) => c.outcome === 'rejected') || !cases.some((c) => c.outcome === 'ok') ? 'INCONCLUSIVE' : 'NO_FAILURE';
   const caveat =
     '合成PDF(画像化した疎な数字列)での結果。NO_FAILUREは「この合成PDFでは再現せず」の意味で、画素数起因でないことの証明ではない。' +
     'FAILURESは同時刻のpaddle-ocrログ(signal 9)と突き合わせて確定する。';

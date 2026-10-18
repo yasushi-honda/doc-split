@@ -62,6 +62,17 @@ describe('toPdfProbeCase / summarizePdfProbe', () => {
     assert.equal(summarizePdfProbe([result(595, 842, 422)].map(toPdfProbeCase)).verdict, 'INCONCLUSIVE');
   });
 
+  it('対照が成功しても、要求ケースが入力拒否ならOCRが走っていないためINCONCLUSIVEにする', () => {
+    const s = summarizePdfProbe([result(595, 842, 200), result(1191, 842, 413)].map(toPdfProbeCase));
+    assert.equal(s.verdict, 'INCONCLUSIVE');
+    assert.deepEqual(s.failedCases, []);
+  });
+
+  it('入力拒否のケースがあっても、別ケースの失敗があればFAILURESを優先する', () => {
+    const s = summarizePdfProbe([result(595, 842, 422), result(1191, 842, 503)].map(toPdfProbeCase));
+    assert.equal(s.verdict, 'FAILURES');
+  });
+
   it('結果が空なら例外にする', () => {
     assert.throws(() => summarizePdfProbe([]));
   });

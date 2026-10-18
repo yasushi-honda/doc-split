@@ -91,7 +91,8 @@ jobs:
 
           def page(w_pt, h_pt):
               # 200dpiで描画した画像を resolution=200 でPDF化すると、ページ寸法が w_pt x h_pt になる
-              w, h = round(w_pt * DPI / 72), round(h_pt * DPI / 72)
+              # 切り捨て: scripts/paddle-ocr-pdf-probe.ts の pixelsAtDpi(int(幅pt*scale)*int(高さpt*scale))と一致させる
+              w, h = int(w_pt * DPI / 72), int(h_pt * DPI / 72)
               img = Image.new("RGB", (w, h), (250, 250, 248))
               d = ImageDraw.Draw(img)
               # 書類に近い見た目: 文字行を密に並べる(ラテン文字・数字。実データは使わない)
