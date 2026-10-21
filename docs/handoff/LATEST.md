@@ -1,6 +1,21 @@
 # ハンドオフメモ
 
-**更新日**: 2026-10-18（大判PDFのpaddle-ocr `signal 9`の実測・dev再現・長辺上限の適用・3環境展開まで完了。以前: 2026-10-15（Gemini廃止後の約1週間の稼働確認・散発ERRORの調査・GOAL.md訂正まで完了）。以前: 2026-10-10（Paddleの高画素数画像のメモリ不足の対応完了）。以前の履歴は各節と`docs/handoff/archive/`を参照）
+**更新日**: 2026-10-21（Gemini廃止後のCloud Run AI環境の3環境健全性確認・起動プローブ改善の当てはめ確認まで完了、kanameone `signal 9` 2件は経過観察）。以前: 2026-10-18（大判PDFのpaddle-ocr `signal 9`の実測・dev再現・長辺上限の適用・3環境展開まで完了。以前: 2026-10-15（Gemini廃止後の約1週間の稼働確認・散発ERRORの調査・GOAL.md訂正まで完了）。以前: 2026-10-10（Paddleの高画素数画像のメモリ不足の対応完了）。以前の履歴は各節と`docs/handoff/archive/`を参照）
+
+## Gemini廃止後のCloud Run AI環境の健全性確認・起動プローブ改善の当てはめ（2026-10-21、読み取りのみ・変更なし）
+
+### 結果
+- **起点**: グローバルハーネスに「Cloud Runのリクエスト課金サービスで、初期化前にポートを開けるサーバーはTCP起動プローブにせずHTTP `/health`にする」改善があった。peerセッション(別案件でLLMのCloud Run運用を検証)と相談し、本案件への当てはめを確認した。
+- **起動プローブ**: `paddle-ocr`(4vCPU/4GiB、min-instances=1、モデルはlifespanで読込・`/health`は準備前503)も`sarashina-summary`(8vCPU/32GiB、min-instances=0、llama.cpp server)も、dev実機・デプロイ定義(毎回`--startup-probe`を明示指定)ともHTTP `/health`で、**既に改善の形**。変更不要。`sarashina-summary`の8vCPU/32GiBでの冷えた起動秒数は未測定(peer実測は4vCPU/8GiBで中央値27.5秒)だが、240秒窓に対し実害なしと判断した。
+- **3環境の健全性**: `OCR_PROVIDER=paddle`・`SUMMARY_PROVIDER=sarashina`(`gcloud functions describe`で実態確認)、直近7日の`processocr`・`sarashina-summary`のERROR 0件、Vertex AI呼び出し0件、書類の`error`/`pending`/`processing`はkanameone・cocoroとも0件(devの`error`3件はseedテストデータ)。
+- **要経過観察**: kanameone `paddle-ocr`の長辺上限後リビジョン(`00004-wgc`)でも`signal 9`が2件(10/19 08:23、10/20 11:56 JST)。メモリ使用率は66%・60%以下、OOMログ0件、`PDF_PAGE_DOWNSCALED`の時刻とも無関係で**原因未確定**、書類への実害なし(`error`0件)。詳細はGOAL.md冒頭の2026-10-21追記。
+- **記録**: GOAL.md追記はPR #1169。グローバルmemory `reference_cloud_run_request_billing_startup_probe_cpu.md`にPaddleOCR・Sarashinaの当てはめ結果を追記(別リポジトリのPR)。
+
+### 次の一手
+- 次の定期確認で`paddle-ocr`の`signal 9`件数が増えていないかを、読み取り・件数のみで見る(trigger=次の定期確認)。
+
+## Issue Net変化(2026-10-21)
+- Close 0件、起票 0件、Net 0(openのIssueは3件: #956・#901・#238)。起票しなかった理由: 実害なしの経過観察で、triage基準(実バグ/実害/CI破壊)を満たさないため。
 
 ## 大判PDFのpaddle-ocr `signal 9`: 実測・dev再現・長辺上限の適用・3環境展開（2026-10-18、ADR-0030追記）
 
