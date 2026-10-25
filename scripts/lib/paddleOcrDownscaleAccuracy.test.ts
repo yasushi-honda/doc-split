@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReport, isOverBudget, pageTextFromPagesJson, parseImageName, summarizeAccuracy, type AccuracyRecord } from '../paddle-ocr-downscale-accuracy';
+import { buildReport, contentTypeForFile, isOverBudget, pageTextFromPagesJson, parseImageName, summarizeAccuracy, type AccuracyRecord } from '../paddle-ocr-downscale-accuracy';
 
 describe('parseImageName', () => {
   it('<fixtureId>__<variant>.jpg を分解する', () => {
@@ -14,6 +14,25 @@ describe('parseImageName', () => {
 
   it('fixtureIdに許可する文字以外(パス区切りなど)はfail-loud', () => {
     assert.throws(() => parseImageName('../x__large.jpg'));
+  });
+
+  it('大判PDF用の <fixtureId>__<variant>.pdf も分解する', () => {
+    assert.deepEqual(parseImageName('golden-plain-01__big-k2.pdf'), { fixtureId: 'golden-plain-01', variant: 'big-k2' });
+  });
+
+  it('PDFでも区切りが無いものはfail-loud', () => {
+    assert.throws(() => parseImageName('golden-plain-01.pdf'));
+  });
+});
+
+describe('contentTypeForFile', () => {
+  it('.jpgはimage/jpeg、.pdfはapplication/pdf(サービスはContent-Typeで形式を判定する)', () => {
+    assert.equal(contentTypeForFile('a__b.jpg'), 'image/jpeg');
+    assert.equal(contentTypeForFile('a__b.pdf'), 'application/pdf');
+  });
+
+  it('未対応の拡張子はfail-loud(誤った形式で送って422を精度の失敗と混同しない)', () => {
+    assert.throws(() => contentTypeForFile('a__b.png'));
   });
 });
 

@@ -84,11 +84,18 @@ export function buildReport(input: {
 }
 
 export function parseImageName(fileName: string): { fixtureId: string; variant: string } {
-  const m = /^([A-Za-z0-9-]+)__([A-Za-z0-9-]+)\.jpg$/.exec(fileName);
+  const m = /^([A-Za-z0-9-]+)__([A-Za-z0-9-]+)\.(?:jpg|pdf)$/.exec(fileName);
   if (!m) {
-    throw new Error(`画像ファイル名の形式が不正です(<fixtureId>__<variant>.jpg): ${fileName}`);
+    throw new Error(`入力ファイル名の形式が不正です(<fixtureId>__<variant>.jpg または .pdf): ${fileName}`);
   }
   return { fixtureId: m[1], variant: m[2] };
+}
+
+/** サービスは Content-Type で入力形式を判定する(services/paddle-ocr/app.py)ため、拡張子から正しい値を返す。 */
+export function contentTypeForFile(fileName: string): string {
+  if (fileName.endsWith('.jpg')) return 'image/jpeg';
+  if (fileName.endsWith('.pdf')) return 'application/pdf';
+  throw new Error(`未対応の拡張子です(.jpg か .pdf のみ): ${fileName}`);
 }
 
 export function summarizeAccuracy(records: AccuracyRecord[]): Record<string, VariantSummary> {
@@ -124,7 +131,7 @@ async function postImage(
   try {
     const res = await fetch(buildOcrEndpoint(serviceUrl), {
       method: 'POST',
-      headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': contentTypeForFile(file), Authorization: `Bearer ${token}` },
       body: fs.readFileSync(file),
       signal: controller.signal,
     });
@@ -163,8 +170,8 @@ async function main(): Promise<void> {
   });
   const tokenProvider = new IdTokenProvider(serviceUrl);
 
-  const files = fs.readdirSync(values.dir).filter((f) => f.endsWith('.jpg')).sort();
-  if (files.length === 0) throw new Error(`画像がありません: ${values.dir}`);
+  const files = fs.readdirSync(values.dir).filter((f) => f.endsWith('.jpg') || f.endsWith('.pdf')).sort();
+  if (files.length === 0) throw new Error(`入力ファイル(.jpg/.pdf)がありません: ${values.dir}`);
 
   const records: AccuracyRecord[] = [];
   const startedAt = Date.now();
