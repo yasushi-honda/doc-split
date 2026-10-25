@@ -1,6 +1,22 @@
 # ハンドオフメモ
 
-**更新日**: 2026-10-21（Gemini廃止後のCloud Run AI環境の3環境健全性確認・起動プローブ改善の当てはめ確認まで完了、kanameone `signal 9` 2件は経過観察）。以前: 2026-10-18（大判PDFのpaddle-ocr `signal 9`の実測・dev再現・長辺上限の適用・3環境展開まで完了。以前: 2026-10-15（Gemini廃止後の約1週間の稼働確認・散発ERRORの調査・GOAL.md訂正まで完了）。以前: 2026-10-10（Paddleの高画素数画像のメモリ不足の対応完了）。以前の履歴は各節と`docs/handoff/archive/`を参照）
+**更新日**: 2026-10-25（kanameoneの大判PDF 3件の`422 PIXEL_LIMIT_EXCEEDED`を原因確定・修正(PR #1171)・dev検証・2環境展開・再処理まで完了。以前: 2026-10-21（Gemini廃止後のCloud Run AI環境の3環境健全性確認・起動プローブ改善の当てはめ確認まで完了、kanameone `signal 9` 2件は経過観察）。以前: 2026-10-18（大判PDFのpaddle-ocr `signal 9`の実測・dev再現・長辺上限の適用・3環境展開まで完了。以前: 2026-10-15（Gemini廃止後の約1週間の稼働確認・散発ERRORの調査・GOAL.md訂正まで完了）。以前: 2026-10-10（Paddleの高画素数画像のメモリ不足の対応完了）。以前の履歴は各節と`docs/handoff/archive/`を参照））
+
+## 大判PDFの`422 PIXEL_LIMIT_EXCEEDED`: 縮小前の画素数判定を縮小後に修正（2026-10-25、PR #1171、ADR-0030追記）
+
+### 結果
+- **起点**: ヘルスレポート(2026-10-25 09:00)でkanameoneの`error`3件。`PaddleOCR request failed: 422 PIXEL_LIMIT_EXCEEDED ページ1(上限: 40000000, 実際: 41743702)`。
+- **原因(実測、`measure-pdf-page-dimensions`をActionsで実行)**: 3件は同一ファイルの重複(930,297B・1ページ・1607.8×3365.3pt・200dpi換算41,743,702px)。`raster.py`の`MAX_PIXELS`検査が縮小前の200dpi換算で判定し、PR #1166の長辺上限で縮小すれば約3.0Mpxに収まるページまで拒否していた。**退行ではなく従来からの拒否**。cocoroの`error`は0件、devの3件はseed。
+- **修正**: PR #1171(`b9a80950`)。縮小して描画するPDFページは縮小後の画素数で判定。縮小しないページ・長辺上限なし・画像は不変。展開爆弾対策は、縮小後の確保量を同じ`MAX_PIXELS`で見るため維持(14400pt角でも長辺2500pxに収まるテストあり)。当初案の「ページ寸法(pt)の絶対上限を別に設ける」は、縮小後判定と重複するため採用しなかった。
+- **検証**: `services/paddle-ocr/tests/` 82件PASS(CIと同じ`requirements-test.txt`)、CI全PASS、`codex review`指摘0件(1回)。dev合成PDFプローブ(1608×3365・1700×3180・A4)は全て初回200・`NO_FAILURE`・`signal 9`0件(合成PDFでの結果で、読み取り精度は未測定)。
+- **反映**: dev→kanameone→cocoroに`deploy-paddle-ocr.yml`で展開(成功)。kanameoneの3件を`fix-stuck-documents --doc-id`でpendingに戻して再処理。再処理後のdry-runでkanameoneの`error`/`processing`は0件。**3件が`processed`になった個別確認は未実施**。
+- **進め方の反省**: dev検証より前にPRをマージし、テスト寸法も実測前の仮定値だった。指摘を受けて以降は実測→dev検証→展開の順に是正。`paddle-ocr`の展開は手動のため、マージで本番に出ることはなかった。
+
+### 次の一手
+- 明朝(2026-10-26 09:00)のヘルスレポートで、kanameoneの待機中0・エラー0を確認する(読み取りのみ)。GOAL.md中断点(c)。
+
+## Issue Net変化(2026-10-25)
+- Close 0件、起票 0件、Net 0(openのIssueは3件: #956・#901・#238)。起票しなかった理由: 原因確定・修正・展開まで本セッションで完了しており、triage基準を満たす未解決の実害が残らないため。
 
 ## Gemini廃止後のCloud Run AI環境の健全性確認・起動プローブ改善の当てはめ（2026-10-21、読み取りのみ・変更なし）
 
