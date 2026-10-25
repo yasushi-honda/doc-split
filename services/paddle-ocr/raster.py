@@ -85,10 +85,16 @@ def pdf_pages_to_rgb(data: bytes, *, dpi: int, limits: RasterLimits) -> Iterator
         try:
             page = pdf[i]
             width_pt, height_pt = page.get_size()
-            scale = dpi / 72
-            pixel_count = int(width_pt * scale) * int(height_pt * scale)
         except pdfium.PdfiumError as e:
             raise InputRejected("INVALID_PDF", f"ページ{i + 1}の読み込みに失敗しました: {e}") from e
+
+        render_scale = _pdf_render_scale(width_pt, height_pt, dpi=dpi, max_long_side=limits.pdf_max_long_side)
+        if render_scale == dpi / 72:
+            pixel_count = int(width_pt * render_scale) * int(height_pt * render_scale)
+        else:
+            # 縮小して描画するページは、実際に確保する縮小後の画素数で判定する(縮小前の大きな配列は確保しない。
+            # 200dpi換算で判定すると、縮小すれば収まる大判ページまで422で拒否していた)。pypdfium2はceilで丸める。
+            pixel_count = math.ceil(width_pt * render_scale) * math.ceil(height_pt * render_scale)
 
         if pixel_count > limits.max_pixels:
             raise InputRejected(
@@ -98,7 +104,6 @@ def pdf_pages_to_rgb(data: bytes, *, dpi: int, limits: RasterLimits) -> Iterator
                 actual=pixel_count,
             )
 
-        render_scale = _pdf_render_scale(width_pt, height_pt, dpi=dpi, max_long_side=limits.pdf_max_long_side)
         if render_scale != dpi / 72:
             # 縮小したページは、応答のrenderDpi(設定値)と実効解像度が食い違うため、ログで検知できるようにする
             # (書類名・内容は含めない。ページ番号と寸法だけ)。本番(uvicorn、rootロガーはWARNING)で出力されるよう

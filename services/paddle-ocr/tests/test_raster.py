@@ -282,13 +282,42 @@ def test_pdf_long_side_limit_applies_to_every_page():
     assert all(s[1] == 2500 for s in shapes)
 
 
-def test_pdf_pixel_guard_still_uses_full_resolution_before_downscale():
-    """MAX_PIXELS(展開爆弾対策)は縮小前の200dpi換算で判定する(画像経路と同じ方針)。"""
+def test_pdf_pixel_guard_judges_actual_render_size_when_long_side_cap_is_set():
+    """長辺上限が有効なPDFのMAX_PIXELSは、実際に確保する(縮小後の)画素数で判定する。
+    縮小後の倍率で最初から描画するので、縮小前の大きな配列は確保されない。
+    縮小後でも上限を超えるなら拒否し、actualは縮小後の画素数(縮小前の換算値ではない)になる。"""
     limits = RasterLimits(max_pages=8, max_pixels=1000, pdf_max_long_side=100)
     with pytest.raises(InputRejected) as exc:
         list(pdf_pages_to_rgb(_make_pdf_bytes(1, width=200, height=300), dpi=200, limits=limits))
     assert exc.value.code == "PIXEL_LIMIT_EXCEEDED"
-    assert exc.value.actual == int(200 * 200 / 72) * int(300 * 200 / 72)
+    assert exc.value.limit == 1000
+    assert 1000 < exc.value.actual <= 100 * 100
+
+
+def test_pdf_page_over_pixel_limit_at_full_resolution_is_rendered_when_downscaled_fits():
+    """kanameone実績: 200dpi換算で41.7Mpx(上限40Mpx超)の大判ページが、縮小前の判定で422になっていた。
+    縮小後(長辺2500px)は約3.3Mpxで上限に収まるので、拒否せず長辺2500pxに縮小して描画する。"""
+    width_pt, height_pt = 1700, 3180
+    assert int(width_pt * 200 / 72) * int(height_pt * 200 / 72) > 40_000_000
+    (shape,) = _pdf_shapes(_make_pdf_bytes(1, width=width_pt, height=height_pt), max_long_side=2500)
+    assert shape[0] == 2500
+    assert shape[0] * shape[1] <= 40_000_000
+
+
+def test_pdf_over_pixel_limit_is_still_rejected_without_long_side_cap():
+    """長辺上限を使わない場合(None)は従来どおり、縮小前の200dpi換算で判定して拒否する(回帰防止)。"""
+    limits = RasterLimits(max_pages=8, max_pixels=40_000_000)
+    with pytest.raises(InputRejected) as exc:
+        list(pdf_pages_to_rgb(_make_pdf_bytes(1, width=1700, height=3180), dpi=200, limits=limits))
+    assert exc.value.code == "PIXEL_LIMIT_EXCEEDED"
+    assert exc.value.actual == int(1700 * 200 / 72) * int(3180 * 200 / 72)
+
+
+def test_pdf_extreme_page_size_is_bounded_by_downscaled_pixel_limit():
+    """展開爆弾対策の維持: 極端に大きいページ(PDF仕様上限14400pt角)でも、縮小後の描画は
+    長辺2500pxに収まり、拒否または小さな配列になる(巨大な配列は確保されない)。"""
+    (shape,) = _pdf_shapes(_make_pdf_bytes(1, width=14400, height=14400), max_long_side=2500)
+    assert max(shape[0], shape[1]) == 2500
 
 
 def test_raster_limits_rejects_non_positive_pdf_max_long_side():
