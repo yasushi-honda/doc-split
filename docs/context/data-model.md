@@ -378,7 +378,11 @@ Gmail添付ファイル取得ログ。重複検知用のMD5ハッシュを含む
 ### Firestoreセキュリティルール
 
 - **read（自分）**: 認証済みユーザー（`request.auth.uid == userId`）
-- **create（自分）**: 認証済みユーザー（ドメイン許可リストによる自動登録用）
+- **create（自分）**: ドメイン許可リストによる自動登録用。次を**すべて**満たす場合のみ許可（2026-10-27、`role`と許可ドメインをルール側でも強制するよう修正。以前は認証済みなら誰でも`role: 'admin'`で自己登録できた）
+  - `request.auth.uid == userId`
+  - `role == 'user'`（管理者の作成はAdmin SDK経由=ルール適用外、または既存管理者の書き込み）
+  - 認証トークンのメールが確認済み（`email_verified`）で、書き込む`email`と一致（大文字小文字は無視）
+  - メールのドメインが`/settings/auth`の`allowedDomains`に含まれる（完全一致）。`settings/auth`や`allowedDomains`が無い場合は拒否（fail-closed）
 - **read/write（全体）**: 管理者のみ
 
 ---

@@ -379,8 +379,20 @@ service cloud.firestore {
     // ユーザー管理
     match /users/{userId} {
       allow read: if isAuthenticated() && request.auth.uid == userId;
-      // 自分自身のドキュメント作成を許可（ドメイン許可リストによる自動登録用）
-      allow create: if isAuthenticated() && request.auth.uid == userId;
+      // 自分自身のドキュメント作成を許可（ドメイン許可リストによる自動登録用）。
+      // 許可ドメインの確認はアプリ(クライアント)側だけだと、SDK/REST直叩きで回避できる。
+      // さらにroleを検証しないと、誰でもrole:'admin'で自己登録して全データを読み書きできた
+      // (2026-10-27 実害確認)。そのためルール側で次を全て強制する:
+      //  - roleは'user'のみ(管理者の作成はAdmin SDK経由=ルール適用外、または管理者の書き込み)
+      //  - 認証トークンのメールが確認済みで、書き込むemailと一致する
+      //  - メールのドメインがsettings/auth.allowedDomainsに含まれる(完全一致・小文字比較)。
+      //    settings/authが無い・allowedDomainsが無い場合はget()/参照が失敗してfail-closedになる
+      allow create: if isAuthenticated() && request.auth.uid == userId
+        && request.resource.data.role == 'user'
+        && request.auth.token.email_verified == true
+        && request.resource.data.email.lower() == request.auth.token.email.lower()
+        && get(/databases/$(database)/documents/settings/auth).data.allowedDomains
+            .hasAny([request.auth.token.email.split('@')[1].lower()]);
       allow read, write: if isAdmin();
     }
 
