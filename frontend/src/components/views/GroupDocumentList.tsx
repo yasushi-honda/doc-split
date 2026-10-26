@@ -463,6 +463,11 @@ export function GroupDocumentList({
         {updateBanner}
         <div className="py-8 text-center text-sm text-gray-500">
           このグループには書類がありません
+          {hiddenByContractEndedCount > 0 && (
+            <p className="mt-1 text-xs text-gray-400">
+              契約終了の利用者の書類 {hiddenByContractEndedCount}件を非表示中(「契約終了の利用者も表示」で確認できます)
+            </p>
+          )}
         </div>
       </>
     );

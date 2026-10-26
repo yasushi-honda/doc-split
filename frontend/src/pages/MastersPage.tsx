@@ -577,7 +577,7 @@ function CustomersMaster() {
               </div>
               {formIsContractEnded && (
                 <p className="text-xs text-gray-500">
-                  この利用者の確認済み書類は、書類画面で既定では表示されなくなります
+                  この利用者の書類は、書類画面で既定では表示されなくなります(未確認・選択待ちの書類も対象)
                 </p>
               )}
             </div>

@@ -7,6 +7,8 @@ import {
   buildContractEndedLookup,
   isDocumentHiddenByContractEnd,
   isCustomerGroupHiddenByContractEnd,
+  findCustomerForGroupKey,
+  buildCustomerNameIndex,
 } from '../contractEnded';
 import type { CustomerMaster } from '@shared/types';
 
@@ -74,10 +76,13 @@ describe('isDocumentHiddenByContractEnd', () => {
     ).toBe(true);
   });
 
-  it('未確認の書類は非表示にしない', () => {
+  it('未確認(選択待ち含む)の書類も非表示にする', () => {
     expect(
       isDocumentHiddenByContractEnd({ customerId: 'ended-1', verified: false }, endedLookup, false),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      isDocumentHiddenByContractEnd({ customerId: 'ended-1' }, endedLookup, false),
+    ).toBe(true);
   });
 
   it('customerIdが契約中マスターを指すなら表示', () => {
@@ -181,5 +186,32 @@ describe('isCustomerGroupHiddenByContractEnd', () => {
 
   it('showContractEnded: trueなら常に表示', () => {
     expect(isCustomerGroupHiddenByContractEnd('契約終了太郎', lookup, true)).toBe(false);
+  });
+});
+
+describe('findCustomerForGroupKey', () => {
+  const customers = [
+    master({ id: 'a', name: '田中 太郎' }),
+    master({ id: 'b', name: '鈴木花子' }),
+    master({ id: 'c', name: '鈴木　花子' }),
+  ];
+
+  const index = buildCustomerNameIndex(customers);
+
+  it('名前キーが一致する顧客が1人ならその顧客を返す(空白の揺れは吸収)', () => {
+    expect(findCustomerForGroupKey('田中太郎', index)?.id).toBe('a');
+  });
+
+  it('同姓同名(名前キーが一致する顧客が2人以上)はnull', () => {
+    expect(findCustomerForGroupKey('鈴木花子', index)).toBeNull();
+  });
+
+  it('マスターに存在しない名前キーはnull', () => {
+    expect(findCustomerForGroupKey('不明顧客', index)).toBeNull();
+  });
+
+  it('空のキー・customers未読込はnull', () => {
+    expect(findCustomerForGroupKey('', index)).toBeNull();
+    expect(findCustomerForGroupKey('田中太郎', buildCustomerNameIndex(undefined))).toBeNull();
   });
 });

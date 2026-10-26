@@ -558,6 +558,107 @@ describe('Firestore Security Rules', () => {
         })
       );
     });
+
+    describe('契約終了フラグ(isContractEnded)のスタッフ開放', () => {
+      const customerPath = ['masters/customers/items', 'customer1'] as const;
+      const officePath = ['masters/offices/items', 'office1'] as const;
+
+      beforeEach(async () => {
+        await testEnv.withSecurityRulesDisabled(async (context) => {
+          // context.firestore()は同一コールバック内で複数回呼ぶと失敗するため1回だけ取得する
+          const db = context.firestore();
+          await setDoc(doc(db, ...customerPath), {
+            name: '山田太郎',
+            furigana: 'ヤマダタロウ',
+          });
+          await setDoc(doc(db, 'masters/customers/items', 'customer2'), {
+            name: '鈴木花子',
+            furigana: 'スズキハナコ',
+            isContractEnded: true,
+          });
+          await setDoc(doc(db, ...officePath), {
+            name: 'テスト事業所',
+            isContractEnded: false,
+          });
+          await setDoc(doc(db, 'masters/caremanagers/items', 'cm1'), { name: 'テストCM' });
+          await setDoc(doc(db, 'masters/documents/items', 'dt1'), { name: 'テスト書類' });
+        });
+      });
+
+      it('一般ユーザーは顧客のisContractEndedのみ更新可能(未設定からtrue)', async () => {
+        const normalUser = testEnv.authenticatedContext(normalUid);
+        await assertSucceeds(updateDoc(doc(normalUser.firestore(), ...customerPath), { isContractEnded: true }));
+      });
+
+      it('一般ユーザーは契約終了を契約中(false)に戻せる', async () => {
+        const normalUser = testEnv.authenticatedContext(normalUid);
+        await assertSucceeds(
+          updateDoc(doc(normalUser.firestore(), 'masters/customers/items', 'customer2'), { isContractEnded: false })
+        );
+      });
+
+      it('isContractEndedと他フィールドの同時更新は拒否される', async () => {
+        const normalUser = testEnv.authenticatedContext(normalUid);
+        await assertFails(
+          updateDoc(doc(normalUser.firestore(), ...customerPath), { isContractEnded: true, name: '改名' })
+        );
+      });
+
+      it('isContractEnded以外のフィールドのみの更新は拒否される', async () => {
+        const db = testEnv.authenticatedContext(normalUid).firestore();
+        await assertFails(updateDoc(doc(db, ...customerPath), { name: '改名' }));
+        await assertFails(updateDoc(doc(db, ...customerPath), { notes: '追記' }));
+      });
+
+      it('isContractEndedが真偽値以外(文字列・null)だと拒否される', async () => {
+        const db = testEnv.authenticatedContext(normalUid).firestore();
+        await assertFails(updateDoc(doc(db, ...customerPath), { isContractEnded: 'true' }));
+        await assertFails(updateDoc(doc(db, ...customerPath), { isContractEnded: null }));
+      });
+
+      it('isContractEndedフィールドの削除は拒否される', async () => {
+        const normalUser = testEnv.authenticatedContext(normalUid);
+        await assertFails(
+          updateDoc(doc(normalUser.firestore(), 'masters/customers/items', 'customer2'), {
+            isContractEnded: deleteField(),
+          })
+        );
+      });
+
+      it('OCR振り分けに効くaliases・furiganaの単独更新や、他フィールド削除との同時更新は拒否される', async () => {
+        const db = testEnv.authenticatedContext(normalUid).firestore();
+        await assertFails(updateDoc(doc(db, ...customerPath), { aliases: ['別表記'] }));
+        await assertFails(updateDoc(doc(db, ...customerPath), { furigana: 'ヤマダ' }));
+        await assertFails(updateDoc(doc(db, ...customerPath), { isContractEnded: true, furigana: deleteField() }));
+      });
+
+      it('事業所・ケアマネ・書類種別など顧客以外のマスターへの更新は拒否される', async () => {
+        const db = testEnv.authenticatedContext(normalUid).firestore();
+        await assertFails(updateDoc(doc(db, 'masters/caremanagers/items', 'cm1'), { isContractEnded: true }));
+        await assertFails(updateDoc(doc(db, 'masters/documents/items', 'dt1'), { isContractEnded: true }));
+      });
+
+      it('顧客以外のマスター(事業所)への同じ更新は拒否される', async () => {
+        const normalUser = testEnv.authenticatedContext(normalUid);
+        await assertFails(updateDoc(doc(normalUser.firestore(), ...officePath), { isContractEnded: true }));
+      });
+
+      it('一般ユーザーは顧客マスターの作成・削除はできない', async () => {
+        const db = testEnv.authenticatedContext(normalUid).firestore();
+        await assertFails(setDoc(doc(db, 'masters/customers/items', 'newCustomer'), { isContractEnded: true }));
+        await assertFails(deleteDoc(doc(db, ...customerPath)));
+      });
+
+      it('ホワイトリスト未登録ユーザーは更新不可', async () => {
+        const unknownUser = testEnv.authenticatedContext(unknownUid);
+        await assertFails(updateDoc(doc(unknownUser.firestore(), ...customerPath), { isContractEnded: true }));
+      });
+
+      it('管理者は従来どおり顧客マスターを更新できる', async () => {
+        const adminUser = testEnv.authenticatedContext(adminUid);
+        await assertSucceeds(updateDoc(doc(adminUser.firestore(), ...customerPath), { name: '改名', isContractEnded: true }));
+      });
+    });
   });
 
   // ============================================

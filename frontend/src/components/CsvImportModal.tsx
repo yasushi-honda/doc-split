@@ -51,6 +51,7 @@ import {
   type DuplicateCheckResultWithDetails,
   type BulkImportResultDetailed,
 } from '@/hooks/useMasters'
+import { normalizeName } from '@/lib/textNormalizer'
 import { matchRowsById, type CsvRowWithId, type ExistingRecordWithId } from '@/lib/csvImportMatching'
 
 type ImportType = 'customer' | 'office' | 'caremanager' | 'documenttype'
@@ -115,7 +116,7 @@ const TYPE_CONFIG = {
       { key: 'aliases', label: '別表記' },
     ],
     defaultAction: 'add' as ImportAction,
-    description: '同名は別人として追加されます。上書きを選択すると既存データを更新します。空欄のセルは既存の値を変更しません(値を削除したい場合は編集ダイアログを使ってください)。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
+    description: '同名の既存データは、既定で上書き(更新)の対象になります。上書きのチェックを外すと別人として追加されます。空欄のセルは既存の値を変更しません(値を削除したい場合は編集ダイアログを使ってください)。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
   },
   office: {
     name: '事業所',
@@ -126,7 +127,7 @@ const TYPE_CONFIG = {
       { key: 'aliases', label: '別表記' },
     ],
     defaultAction: 'add' as ImportAction,
-    description: '同名は別事業所として追加されます。上書きを選択すると既存データを更新します。空欄のセルは既存の値を変更しません(値を削除したい場合は編集ダイアログを使ってください)。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
+    description: '同名の既存データは、既定で上書き(更新)の対象になります。上書きのチェックを外すと別事業所として追加されます。空欄のセルは既存の値を変更しません(値を削除したい場合は編集ダイアログを使ってください)。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
   },
   caremanager: {
     name: 'ケアマネ',
@@ -135,7 +136,7 @@ const TYPE_CONFIG = {
       { key: 'email', label: 'メールアドレス' },
     ],
     defaultAction: 'skip' as ImportAction,
-    description: '同名はスキップされます。上書きを選択すると既存データを更新します。空欄のセルは既存の値を変更しません。',
+    description: '同名の既存データは、既定で上書き(更新)の対象になります。上書きのチェックを外すとスキップされます。空欄のセルは既存の値を変更しません。',
   },
   documenttype: {
     name: '書類種別',
@@ -147,7 +148,7 @@ const TYPE_CONFIG = {
       { key: 'aliases', label: '別表記' },
     ],
     defaultAction: 'skip' as ImportAction,
-    description: '同名はスキップされます。上書きを選択すると既存データを更新します。空欄のセルは既存の値を変更しません。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
+    description: '同名の既存データは、既定で上書き(更新)の対象になります。上書きのチェックを外すとスキップされます。空欄のセルは既存の値を変更しません。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
   },
 }
 
@@ -343,15 +344,43 @@ export function CsvImportModal({ type, isOpen, onClose, onImport, existingRecord
           checked = result as DuplicateCheckResultWithDetails<AnyCSVData>[]
         }
 
+        // 部分一致行の上書き既定ON(クライアント要望 2026-10-27)は、対象が一意に決まる行だけに限る。
+        // 次のいずれかは別人・別レコードを上書きしうる(codex review P1指摘)ため従来の既定
+        // (追加/スキップ)に戻し、利用者が明示的にチェックしたときだけ上書きする:
+        //  1. 照合時に取得した既存データで同名が2件以上(sameNameExistingCount。画面キャッシュに依存しない)
+        //  2. CSV内に同名の行が複数ある(ID一致行を含む)
+        //  3. 同じ既存レコードを狙う行が複数ある(ID一致行と名前照合行の重なりを含む)
+        // ケアマネ・書類種別は名前=ドキュメントIDで同名が成立しないため1・2のみ該当しうる
+        const csvNameCounts = new Map<string, number>()
+        for (const row of mapped) {
+          const key = normalizeName((row as { name?: string }).name ?? '')
+          csvNameCounts.set(key, (csvNameCounts.get(key) ?? 0) + 1)
+        }
+        const targetCounts = new Map<string, number>()
+        const countTarget = (id: string | undefined) => {
+          if (id) targetCounts.set(id, (targetCounts.get(id) ?? 0) + 1)
+        }
+        idMatchedRows.forEach(r => countTarget(r.existingId))
+        checked.forEach(item => countTarget((item.existingData as { id?: string } | null)?.id))
+        const isAmbiguous = (item: DuplicateCheckResultWithDetails<AnyCSVData>) => {
+          const csvKey = normalizeName((item.csvData as { name?: string }).name ?? '')
+          const targetId = (item.existingData as { id?: string } | null)?.id
+          return (item.sameNameExistingCount ?? 1) > 1
+            || (csvNameCounts.get(csvKey) ?? 0) > 1
+            || (targetId !== undefined && (targetCounts.get(targetId) ?? 0) > 1)
+        }
+
         const nameMatchedRows: PreviewRow[] = checked.map(item => {
           const exactMatch = item.isDuplicate && isExactMatchData(type, item.csvData, item.existingData)
+          const duplicateAction: ImportAction = isAmbiguous(item) ? config.defaultAction : 'overwrite'
           return {
             csvData: item.csvData,
             existingData: item.existingData,
             isDuplicate: item.isDuplicate,
             isExactMatch: exactMatch,
-            // 完全一致はデフォルトでスキップ、部分一致はマスター別のデフォルト動作
-            action: exactMatch ? 'skip' : (item.isDuplicate ? config.defaultAction : 'add'),
+            // 完全一致はデフォルトでスキップ、部分一致は上書きON(曖昧な行・チェックを外した行は
+            // config.defaultAction)
+            action: exactMatch ? 'skip' : (item.isDuplicate ? duplicateAction : 'add'),
             existingId: (item.existingData as { id?: string } | null)?.id,
           }
         })
