@@ -580,6 +580,8 @@ describe('Firestore Security Rules', () => {
             name: 'テスト事業所',
             isContractEnded: false,
           });
+          await setDoc(doc(db, 'masters/caremanagers/items', 'cm1'), { name: 'テストCM' });
+          await setDoc(doc(db, 'masters/documents/items', 'dt1'), { name: 'テスト書類' });
         });
       });
 
@@ -621,6 +623,19 @@ describe('Firestore Security Rules', () => {
             isContractEnded: deleteField(),
           })
         );
+      });
+
+      it('OCR振り分けに効くaliases・furiganaの単独更新や、他フィールド削除との同時更新は拒否される', async () => {
+        const db = testEnv.authenticatedContext(normalUid).firestore();
+        await assertFails(updateDoc(doc(db, ...customerPath), { aliases: ['別表記'] }));
+        await assertFails(updateDoc(doc(db, ...customerPath), { furigana: 'ヤマダ' }));
+        await assertFails(updateDoc(doc(db, ...customerPath), { isContractEnded: true, furigana: deleteField() }));
+      });
+
+      it('事業所・ケアマネ・書類種別など顧客以外のマスターへの更新は拒否される', async () => {
+        const db = testEnv.authenticatedContext(normalUid).firestore();
+        await assertFails(updateDoc(doc(db, 'masters/caremanagers/items', 'cm1'), { isContractEnded: true }));
+        await assertFails(updateDoc(doc(db, 'masters/documents/items', 'dt1'), { isContractEnded: true }));
       });
 
       it('顧客以外のマスター(事業所)への同じ更新は拒否される', async () => {

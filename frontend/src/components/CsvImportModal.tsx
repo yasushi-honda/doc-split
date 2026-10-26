@@ -344,35 +344,42 @@ export function CsvImportModal({ type, isOpen, onClose, onImport, existingRecord
           checked = result as DuplicateCheckResultWithDetails<AnyCSVData>[]
         }
 
-        // 同姓同名の既存レコード(顧客・事業所)や、CSV内の同名行が複数ある場合、名前照合は
-        // 1件に畳まれて別人を上書きしうる(codex review P1指摘)。そのような行は上書きを既定にせず
-        // マスター別の従来既定(追加/スキップ)に戻し、利用者が明示的にチェックしたときだけ上書きする
-        const nameKey = (data: AnyCSVData | null | undefined) => normalizeName((data as { name?: string } | null | undefined)?.name ?? '')
-        const existingNameCounts = new Map<string, number>()
-        for (const rec of existingRecords ?? []) {
-          const key = normalizeName(rec.name)
-          existingNameCounts.set(key, (existingNameCounts.get(key) ?? 0) + 1)
-        }
+        // 部分一致行の上書き既定ON(クライアント要望 2026-10-27)は、対象が一意に決まる行だけに限る。
+        // 次のいずれかは別人・別レコードを上書きしうる(codex review P1指摘)ため従来の既定
+        // (追加/スキップ)に戻し、利用者が明示的にチェックしたときだけ上書きする:
+        //  1. 照合時に取得した既存データで同名が2件以上(sameNameExistingCount。画面キャッシュに依存しない)
+        //  2. CSV内に同名の行が複数ある(ID一致行を含む)
+        //  3. 同じ既存レコードを狙う行が複数ある(ID一致行と名前照合行の重なりを含む)
+        // ケアマネ・書類種別は名前=ドキュメントIDで同名が成立しないため1・2のみ該当しうる
         const csvNameCounts = new Map<string, number>()
-        for (const item of checked) {
-          const key = nameKey(item.csvData)
+        for (const row of mapped) {
+          const key = normalizeName((row as { name?: string }).name ?? '')
           csvNameCounts.set(key, (csvNameCounts.get(key) ?? 0) + 1)
         }
-        const isAmbiguousName = (data: AnyCSVData) => {
-          const key = nameKey(data)
-          return (existingNameCounts.get(key) ?? 0) > 1 || (csvNameCounts.get(key) ?? 0) > 1
+        const targetCounts = new Map<string, number>()
+        const countTarget = (id: string | undefined) => {
+          if (id) targetCounts.set(id, (targetCounts.get(id) ?? 0) + 1)
+        }
+        idMatchedRows.forEach(r => countTarget(r.existingId))
+        checked.forEach(item => countTarget((item.existingData as { id?: string } | null)?.id))
+        const isAmbiguous = (item: DuplicateCheckResultWithDetails<AnyCSVData>) => {
+          const csvKey = normalizeName((item.csvData as { name?: string }).name ?? '')
+          const targetId = (item.existingData as { id?: string } | null)?.id
+          return (item.sameNameExistingCount ?? 1) > 1
+            || (csvNameCounts.get(csvKey) ?? 0) > 1
+            || (targetId !== undefined && (targetCounts.get(targetId) ?? 0) > 1)
         }
 
         const nameMatchedRows: PreviewRow[] = checked.map(item => {
           const exactMatch = item.isDuplicate && isExactMatchData(type, item.csvData, item.existingData)
-          const duplicateAction: ImportAction = isAmbiguousName(item.csvData) ? config.defaultAction : 'overwrite'
+          const duplicateAction: ImportAction = isAmbiguous(item) ? config.defaultAction : 'overwrite'
           return {
             csvData: item.csvData,
             existingData: item.existingData,
             isDuplicate: item.isDuplicate,
             isExactMatch: exactMatch,
-            // 完全一致はデフォルトでスキップ、部分一致は上書きON(クライアント要望 2026-10-27。
-            // チェックを外した行・同名が曖昧な行はconfig.defaultActionになる)
+            // 完全一致はデフォルトでスキップ、部分一致は上書きON(曖昧な行・チェックを外した行は
+            // config.defaultAction)
             action: exactMatch ? 'skip' : (item.isDuplicate ? duplicateAction : 'add'),
             existingId: (item.existingData as { id?: string } | null)?.id,
           }

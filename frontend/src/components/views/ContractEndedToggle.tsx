@@ -42,15 +42,24 @@ export function ContractEndedToggle({ customer }: ContractEndedToggleProps) {
       await setContractEnded.mutateAsync({ id: customer.id, isContractEnded: !isEnded });
       setOpen(false);
     } catch (err) {
-      console.error('[ContractEndedToggle] 契約状態の更新に失敗しました', err);
+      console.error('[ContractEndedToggle] 契約状態の更新に失敗しました', { customerId: customer.id, err });
       setOpen(false);
-      setError('契約状態の更新に失敗しました');
+      const code = (err as { code?: string }).code;
+      setError(
+        code === 'permission-denied'
+          ? '契約状態を変更する権限がありません。ページを再読み込みして再度お試しください'
+          : '契約状態の更新に失敗しました。通信状況を確認して再度お試しください'
+      );
     }
   };
 
   return (
     <div className="flex flex-shrink-0 items-center gap-2 pr-4">
-      {error && <span className="text-xs text-red-600">{error}</span>}
+      {error && (
+        <span role="alert" className="text-xs text-red-600">
+          {error}
+        </span>
+      )}
       {isEnded && (
         <Badge variant="secondary" className="text-xs">
           契約終了
@@ -81,6 +90,7 @@ export function ContractEndedToggle({ customer }: ContractEndedToggleProps) {
           <AlertDialogFooter>
             <AlertDialogCancel>キャンセル</AlertDialogCancel>
             <AlertDialogAction
+              disabled={setContractEnded.isPending}
               onClick={(e) => {
                 e.preventDefault();
                 void handleConfirm();

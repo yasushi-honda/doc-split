@@ -283,7 +283,8 @@ export function useSetCustomerContractEnded() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: setCustomerContractEnded,
-    onSuccess: () => {
+    // 失敗時(ルール拒否・他スタッフが先に変更等)も最新状態を取り直し、古いキャッシュ基準の再操作を防ぐ
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['masters', 'customers'] })
     },
   })
@@ -997,6 +998,12 @@ export interface DuplicateCheckResultWithDetails<T> {
   csvData: T
   existingData: T | null
   isDuplicate: boolean
+  /**
+   * 照合時に取得した既存データ内で、同じ名前のレコードが何件あったか(顧客・事業所のみ)。
+   * 2以上だと名前照合は1件に畳まれて別人を指しうるため、呼び出し側は上書きを既定にしない。
+   * 未設定(ケアマネ・書類種別)は名前=ドキュメントIDで同名が成立しないため常に1件扱い
+   */
+  sameNameExistingCount?: number
 }
 
 /**
@@ -1097,9 +1104,11 @@ export async function checkCustomerDuplicatesWithDetails(
 ): Promise<DuplicateCheckResultWithDetails<{ name: string; furigana: string; careManagerName?: string; notes?: string; aliases?: string; id?: string }>[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
   const existingMap = new Map<string, { name: string; furigana: string; careManagerName?: string; notes?: string; aliases?: string; id: string }>()
+  const sameNameCounts = new Map<string, number>()
 
   snapshot.docs.forEach(d => {
     const data = d.data()
+    sameNameCounts.set(data.name, (sameNameCounts.get(data.name) ?? 0) + 1)
     existingMap.set(data.name, {
       name: data.name,
       furigana: data.furigana || '',
@@ -1123,6 +1132,7 @@ export async function checkCustomerDuplicatesWithDetails(
       },
       existingData: existing || null,
       isDuplicate: !!existing,
+      sameNameExistingCount: sameNameCounts.get(normalizedName) ?? 0,
     }
   })
 }
@@ -1134,9 +1144,11 @@ export async function checkOfficeDuplicatesWithDetails(
 ): Promise<DuplicateCheckResultWithDetails<{ name: string; shortName: string; notes?: string; aliases?: string; id?: string }>[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
   const existingMap = new Map<string, { name: string; shortName: string; notes?: string; aliases?: string; id: string }>()
+  const sameNameCounts = new Map<string, number>()
 
   snapshot.docs.forEach(d => {
     const data = d.data()
+    sameNameCounts.set(data.name, (sameNameCounts.get(data.name) ?? 0) + 1)
     existingMap.set(data.name, {
       name: data.name,
       shortName: data.shortName || '',
@@ -1158,6 +1170,7 @@ export async function checkOfficeDuplicatesWithDetails(
       },
       existingData: existing || null,
       isDuplicate: !!existing,
+      sameNameExistingCount: sameNameCounts.get(normalizedName) ?? 0,
     }
   })
 }

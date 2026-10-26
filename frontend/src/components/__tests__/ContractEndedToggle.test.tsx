@@ -74,8 +74,37 @@ describe('ContractEndedToggle', () => {
     fireEvent.click(screen.getByRole('button', { name: '契約終了にする' }))
     const buttons = screen.getAllByRole('button', { name: '契約終了にする' })
     fireEvent.click(buttons[buttons.length - 1]!)
-    await waitFor(() => expect(screen.getByText('契約状態の更新に失敗しました')).toBeDefined())
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('契約状態の更新に失敗しました'))
     expect(errorSpy).toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
+  it('権限エラーのときは権限不足を案内する文言を出す', async () => {
+    mockMutateAsync.mockRejectedValue(Object.assign(new Error('denied'), { code: 'permission-denied' }))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(<ContractEndedToggle customer={customer()} />)
+    fireEvent.click(screen.getByRole('button', { name: '契約終了にする' }))
+    const buttons = screen.getAllByRole('button', { name: '契約終了にする' })
+    fireEvent.click(buttons[buttons.length - 1]!)
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('権限がありません'))
+    errorSpy.mockRestore()
+  })
+
+  it('成功したらダイアログを閉じ、再度開くとエラー表示は消えている', async () => {
+    mockMutateAsync.mockRejectedValueOnce(new Error('network'))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(<ContractEndedToggle customer={customer()} />)
+    fireEvent.click(screen.getByRole('button', { name: '契約終了にする' }))
+    let buttons = screen.getAllByRole('button', { name: '契約終了にする' })
+    fireEvent.click(buttons[buttons.length - 1]!)
+    await waitFor(() => expect(screen.getByRole('alert')).toBeDefined())
+    // 再度開くとエラー表示は消える
+    fireEvent.click(screen.getByRole('button', { name: '契約終了にする' }))
+    expect(screen.queryByRole('alert')).toBeNull()
+    // 今度は成功 → ダイアログが閉じる
+    buttons = screen.getAllByRole('button', { name: '契約終了にする' })
+    fireEvent.click(buttons[buttons.length - 1]!)
+    await waitFor(() => expect(screen.queryByText(/今後届く未確認・選択待ちの書類も非表示/)).toBeNull())
     errorSpy.mockRestore()
   })
 })
