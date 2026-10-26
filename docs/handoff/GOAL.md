@@ -1,8 +1,20 @@
 ---
-updated: 2026-10-25
+updated: 2026-10-26
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
+
+## 【停止中・2026-10-26】cocoro環境(`docsplit-cocoro`)の課金停止対応(decision-makerの指示。範囲はAskUserQuestionで「Scheduler一時停止」、データは「保持」と確定)
+
+**実施内容(gcloud、`--account=hy.unimail.11@gmail.com`で実測)**: ①Cloud Scheduler 5件を`pause`(`processOCR`・`checkGmailAttachments`・`driveExportScheduled`・`generateSummaryBatch`・`driveFolderClaimDivergentSweep`。一覧で全件`PAUSED`を確認)。②`paddle-ocr`の`min-instances`を1→0に変更(常時1台起動が主な課金要因だった。リビジョン`paddle-ocr-00006-4p7`、`minScale`が空=0を確認)。Storage・Firestoreのデータは保持。billingは`billingEnabled: true`のまま(ストレージ保管料と従量分は残る)。
+
+**注意**: ①停止中はcocoroへデプロイしない(`deploy-paddle-ocr.yml`等が`min-instances=1`へ戻す可能性、Schedulerの再作成も同様。未確認)。②課金を完全に0にするには課金アカウント解除かプロジェクト削除が必要(データに影響するため未実施、別途decision-maker判断)。③上記のcocoro関連の「条件待ち」(画像書類の実績確認など)は停止中は発生しない。
+
+**再開手順**: `gcloud scheduler jobs resume firebase-schedule-<関数名>-asia-northeast1 --location=asia-northeast1 --project=docsplit-cocoro`を5件に実行し、`gcloud run services update paddle-ocr --min-instances=1 --region=asia-northeast1 --project=docsplit-cocoro`で戻す(元の`min-instances=1`はPR #967の1ページcoldゲート緩和が根拠)。
+
+**決定(2026-10-26、decision-maker)**: cocoroは**再開しない**。ただし**データをアプリで閲覧できる状態は残す**(プロジェクト削除・課金アカウント解除は行わない)。残コストは概算で月$1〜2(Artifact Registry約9GBが大半。単価は記憶ベースで未確認、実額は請求画面で要確認)。Artifact Registryの`paddle-ocr`(1.4GB)・`sarashina-summary`(6.8GB)イメージ削除で月約$0.8の削減見込み(閲覧用Functionsの`gcf-artifacts`は残す)。**2026-10-26に実施済み**(decision-makerの承認後): Cloud Runの`paddle-ocr`・`sarashina-summary`サービスと、Artifact Registryの同名リポジトリ2件(paddle-ocr 2世代・sarashina-summary 1世代)を削除。残りは`gcf-artifacts`(800MB)のみ、Hostingは200応答を確認。再開する場合は両サービスの再デプロイ(再ビルド)が必要。**これにより、本節より下のcocoro関連の条件待ち(画像書類の実績確認など)と、cocoroへのデプロイ・Schedulerの再開は対象外**。
+
+**未確認**: 停止後の実際の請求額の推移(trigger=次回の請求確認)。クライアントへの停止連絡の要否・実施状況は不明。
 
 ## 【進行中・2026-10-06開始】Gemini完全廃止(緊急用OCR経路も含めて使わない)。承認済み計画: `/Users/yyyhhh/.claude/plans/humble-conjuring-parasol.md`、決定記録: `docs/adr/0029-gemini-full-removal.md`
 
