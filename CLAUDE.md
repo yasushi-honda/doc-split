@@ -10,7 +10,8 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | 環境 | 用途 | 実運用データ |
 |------|------|-------------|
 | **dev** (`doc-split-dev`) | 開発・テスト専用。ビルド確認やテストデータでの動作検証に使用 | なし |
-| **クライアント環境** (kanameone/cocoro等) | 顧客の本番運用環境。Gmail連携・OCR処理が稼働中 | あり |
+| **クライアント環境** (kanameone等) | 顧客の本番運用環境。Gmail連携・OCR処理が稼働中 | あり |
+| **cocoro** (停止中) | 2026-10-26に停止、再開しない。取り込み・処理は止め、データ閲覧のみ残す。デプロイ・Scheduler再開の対象外 | あり(閲覧のみ) |
 
 | 項目 | 値 |
 |------|-----|
@@ -34,7 +35,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 
 ### マルチクライアント環境切替
 ```bash
-./scripts/switch-client.sh <client-name>  # 環境切替（dev/kanameone/cocoro）
+./scripts/switch-client.sh <client-name>  # 環境切替（dev/kanameone。cocoroは停止中）
 ./scripts/switch-client.sh --list         # 利用可能なクライアント一覧
 ```
 
@@ -190,4 +191,4 @@ Viteは`.env.local`を最優先で読み込む。デプロイスクリプトは�
 
 ## マルチクライアント運用 (catchup 時の必須確認、詳細: [.claude/rules/multi-client-audit-matrix.md](.claude/rules/multi-client-audit-matrix.md))
 
-doc-split は **dev / cocoro / kanameone** の 3 環境で稼働するマルチクライアント構成。データ破壊系 Issue (#432 silent 破壊 collision 等) の対応では、catchup 時に「ある環境で復旧済」と書かれていても **他環境の audit を独立工程として確認**すること（Issue #432 session81+84 教訓、必須マトリクスは詳細ファイル参照）。
+doc-split は **dev / kanameone** の 2 環境で稼働するマルチクライアント構成(cocoro は 2026-10-26 に停止、再開しない。閲覧のみ残す。過去事例の audit 結果は cocoro を含む)。データ破壊系 Issue (#432 silent 破壊 collision 等) の対応では、catchup 時に「ある環境で復旧済」と書かれていても **他環境の audit を独立工程として確認**すること（Issue #432 session81+84 教訓、必須マトリクスは詳細ファイル参照）。

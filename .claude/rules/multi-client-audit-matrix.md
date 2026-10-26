@@ -4,7 +4,7 @@ Issue #432 session81+84 教訓。
 
 ---
 
-doc-split は **dev / cocoro / kanameone** の 3 環境で稼働するマルチクライアント構成。データ破壊系 Issue (#432 silent 破壊 collision 等) の対応では、catchup 時に「ある環境で復旧済」と書かれていても **他環境の audit を独立工程として確認**すること。
+doc-split は **dev / kanameone** の 2 環境で稼働するマルチクライアント構成(cocoro は 2026-10-26 に停止、再開しない。閲覧のみ残す。下のマトリクスの cocoro 列は過去事例の記録で、新規の確認対象外)。データ破壊系 Issue (#432 silent 破壊 collision 等) の対応では、catchup 時に「ある環境で復旧済」と書かれていても **他環境の audit を独立工程として確認**すること。
 
 ## 必須マトリクス (catchup 時に作成)
 
