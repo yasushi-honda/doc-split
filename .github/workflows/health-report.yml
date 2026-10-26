@@ -47,7 +47,8 @@ jobs:
       - name: Generate and send report
         working-directory: ./scripts/health-report
         env:
-          CLIENT_PROJECTS: 'cocoro:docsplit-cocoro,kanameone:docsplit-kanameone'
+          # cocoroは2026-10-26に停止(新規取り込み・処理なし)、監視対象から除外
+          CLIENT_PROJECTS: 'kanameone:docsplit-kanameone'
           HEALTH_REPORT_SMTP_USER: ${{ secrets.HEALTH_REPORT_SMTP_USER }}
           HEALTH_REPORT_SMTP_PASS: ${{ secrets.HEALTH_REPORT_SMTP_PASS }}
           HEALTH_REPORT_TO: ${{ secrets.HEALTH_REPORT_TO }}
