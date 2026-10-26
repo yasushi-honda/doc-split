@@ -122,10 +122,10 @@ function GroupItem({ group, isExpanded, furiganaMap, dateFilter, showContractEnd
   return (
     <div className="border-b border-gray-100 last:border-0">
       {/* グループヘッダー(契約終了切替はbuttonの入れ子を避けて外側に並べる) */}
-      <div className="flex items-center">
+      <div className="flex flex-wrap items-center">
       <button
         onClick={onToggle}
-        className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-gray-50"
+        className="flex min-w-0 flex-1 basis-56 items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-gray-50"
       >
         {isExpanded ? (
           <ChevronDown className="h-5 w-5 flex-shrink-0 text-gray-400" />

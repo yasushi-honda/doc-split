@@ -54,7 +54,7 @@ export function ContractEndedToggle({ customer }: ContractEndedToggleProps) {
   };
 
   return (
-    <div className="flex flex-shrink-0 items-center gap-2 pr-4">
+    <div className="ml-auto flex flex-shrink-0 items-center gap-2 px-4 pb-2 sm:pb-0 sm:pl-0">
       {error && (
         <span role="alert" className="text-xs text-red-600">
           {error}
