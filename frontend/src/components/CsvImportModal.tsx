@@ -51,6 +51,7 @@ import {
   type DuplicateCheckResultWithDetails,
   type BulkImportResultDetailed,
 } from '@/hooks/useMasters'
+import { normalizeName } from '@/lib/textNormalizer'
 import { matchRowsById, type CsvRowWithId, type ExistingRecordWithId } from '@/lib/csvImportMatching'
 
 type ImportType = 'customer' | 'office' | 'caremanager' | 'documenttype'
@@ -115,7 +116,7 @@ const TYPE_CONFIG = {
       { key: 'aliases', label: '別表記' },
     ],
     defaultAction: 'add' as ImportAction,
-    description: '同名は別人として追加されます。上書きを選択すると既存データを更新します。空欄のセルは既存の値を変更しません(値を削除したい場合は編集ダイアログを使ってください)。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
+    description: '同名の既存データは、既定で上書き(更新)の対象になります。上書きのチェックを外すと別人として追加されます。空欄のセルは既存の値を変更しません(値を削除したい場合は編集ダイアログを使ってください)。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
   },
   office: {
     name: '事業所',
@@ -126,7 +127,7 @@ const TYPE_CONFIG = {
       { key: 'aliases', label: '別表記' },
     ],
     defaultAction: 'add' as ImportAction,
-    description: '同名は別事業所として追加されます。上書きを選択すると既存データを更新します。空欄のセルは既存の値を変更しません(値を削除したい場合は編集ダイアログを使ってください)。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
+    description: '同名の既存データは、既定で上書き(更新)の対象になります。上書きのチェックを外すと別事業所として追加されます。空欄のセルは既存の値を変更しません(値を削除したい場合は編集ダイアログを使ってください)。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
   },
   caremanager: {
     name: 'ケアマネ',
@@ -135,7 +136,7 @@ const TYPE_CONFIG = {
       { key: 'email', label: 'メールアドレス' },
     ],
     defaultAction: 'skip' as ImportAction,
-    description: '同名はスキップされます。上書きを選択すると既存データを更新します。空欄のセルは既存の値を変更しません。',
+    description: '同名の既存データは、既定で上書き(更新)の対象になります。上書きのチェックを外すとスキップされます。空欄のセルは既存の値を変更しません。',
   },
   documenttype: {
     name: '書類種別',
@@ -147,7 +148,7 @@ const TYPE_CONFIG = {
       { key: 'aliases', label: '別表記' },
     ],
     defaultAction: 'skip' as ImportAction,
-    description: '同名はスキップされます。上書きを選択すると既存データを更新します。空欄のセルは既存の値を変更しません。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
+    description: '同名の既存データは、既定で上書き(更新)の対象になります。上書きのチェックを外すとスキップされます。空欄のセルは既存の値を変更しません。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
   },
 }
 
@@ -343,15 +344,36 @@ export function CsvImportModal({ type, isOpen, onClose, onImport, existingRecord
           checked = result as DuplicateCheckResultWithDetails<AnyCSVData>[]
         }
 
+        // 同姓同名の既存レコード(顧客・事業所)や、CSV内の同名行が複数ある場合、名前照合は
+        // 1件に畳まれて別人を上書きしうる(codex review P1指摘)。そのような行は上書きを既定にせず
+        // マスター別の従来既定(追加/スキップ)に戻し、利用者が明示的にチェックしたときだけ上書きする
+        const nameKey = (data: AnyCSVData | null | undefined) => normalizeName((data as { name?: string } | null | undefined)?.name ?? '')
+        const existingNameCounts = new Map<string, number>()
+        for (const rec of existingRecords ?? []) {
+          const key = normalizeName(rec.name)
+          existingNameCounts.set(key, (existingNameCounts.get(key) ?? 0) + 1)
+        }
+        const csvNameCounts = new Map<string, number>()
+        for (const item of checked) {
+          const key = nameKey(item.csvData)
+          csvNameCounts.set(key, (csvNameCounts.get(key) ?? 0) + 1)
+        }
+        const isAmbiguousName = (data: AnyCSVData) => {
+          const key = nameKey(data)
+          return (existingNameCounts.get(key) ?? 0) > 1 || (csvNameCounts.get(key) ?? 0) > 1
+        }
+
         const nameMatchedRows: PreviewRow[] = checked.map(item => {
           const exactMatch = item.isDuplicate && isExactMatchData(type, item.csvData, item.existingData)
+          const duplicateAction: ImportAction = isAmbiguousName(item.csvData) ? config.defaultAction : 'overwrite'
           return {
             csvData: item.csvData,
             existingData: item.existingData,
             isDuplicate: item.isDuplicate,
             isExactMatch: exactMatch,
-            // 完全一致はデフォルトでスキップ、部分一致はマスター別のデフォルト動作
-            action: exactMatch ? 'skip' : (item.isDuplicate ? config.defaultAction : 'add'),
+            // 完全一致はデフォルトでスキップ、部分一致は上書きON(クライアント要望 2026-10-27。
+            // チェックを外した行・同名が曖昧な行はconfig.defaultActionになる)
+            action: exactMatch ? 'skip' : (item.isDuplicate ? duplicateAction : 'add'),
             existingId: (item.existingData as { id?: string } | null)?.id,
           }
         })

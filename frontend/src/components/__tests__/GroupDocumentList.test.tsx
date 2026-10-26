@@ -368,7 +368,7 @@ describe('GroupDocumentList - 契約終了した利用者の非表示(Issue #103
     expect(screen.queryByText(/非表示中/)).toBeNull()
   })
 
-  it('その他のグループタイプ(フラット表示): 契約終了利用者の確認済み書類が一覧から消え、未確認書類は残る', () => {
+  it('その他のグループタイプ(フラット表示): 契約終了利用者の書類は確認済み・未確認とも一覧から消える', () => {
     const docs = [
       makeDocument({ id: 'doc-ended-verified', customerId: 'customer-ended', customerName: '契約終了花子', verified: true, fileName: 'ended-verified.pdf' }),
       makeDocument({ id: 'doc-ended-unverified', customerId: 'customer-ended', customerName: '契約終了花子', verified: false, fileName: 'ended-unverified.pdf' }),
@@ -389,7 +389,29 @@ describe('GroupDocumentList - 契約終了した利用者の非表示(Issue #103
     renderWithClient(<GroupDocumentList groupType="customer" groupKey="customer-ended" />)
 
     expect(screen.queryByText('ended-verified.pdf')).toBeNull()
-    expect(screen.getByText('ended-unverified.pdf')).toBeDefined()
+    expect(screen.queryByText('ended-unverified.pdf')).toBeNull()
+    expect(screen.getByText(/契約終了の利用者の書類 2件を非表示中/)).toBeDefined()
+  })
+
+  it('契約終了で全件が非表示でも、非表示にした件数と再表示の案内を空状態に出す', () => {
+    const docs = [
+      makeDocument({ id: 'doc-e1', customerId: 'customer-ended', customerName: '契約終了花子', verified: false, fileName: 'e1.pdf' }),
+    ]
+    mockUseGroupDocuments.mockReturnValue({
+      data: { pages: [{ documents: docs, lastDoc: null, hasMore: false }] },
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isFetchNextPageError: false,
+      isLoading: false,
+      isError: false,
+      isRefetching: false,
+      refetch: vi.fn(),
+    })
+
+    renderWithClient(<GroupDocumentList groupType="customer" groupKey="customer-ended" />)
+
+    expect(screen.getByText('このグループには書類がありません')).toBeDefined()
     expect(screen.getByText(/契約終了の利用者の書類 1件を非表示中/)).toBeDefined()
   })
 })

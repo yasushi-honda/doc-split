@@ -355,6 +355,13 @@ service cloud.firestore {
     match /masters/{masterId}/items/{itemId} {
       allow read: if isWhitelisted();
       allow write: if isAdmin();
+      // 契約終了フラグ(isContractEnded)のみ、ホワイトリスト登録済みの全スタッフが更新可
+      // (2026-10-27 クライアント要望。顧客名・別表記などOCR振り分けに効く項目は管理者限定のまま)。
+      // create/deleteは含まない。affectedKeys().hasOnly()により他フィールドの追加・変更・削除を
+      // 同時に混入できず、フラグ自体の削除(null化含む)もbool検証で拒否される
+      allow update: if masterId == 'customers' && isWhitelisted()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isContractEnded'])
+        && request.resource.data.isContractEnded is bool;
     }
 
     // エラー履歴

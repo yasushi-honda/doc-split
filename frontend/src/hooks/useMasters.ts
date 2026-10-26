@@ -273,6 +273,22 @@ export function useUpdateCustomer() {
   })
 }
 
+// 契約終了フラグのみの更新(全スタッフが実行可。FirestoreルールがisContractEnded以外の
+// フィールドを含む更新を拒否するため、updateCustomerは流用せずこの専用関数を使う)
+async function setCustomerContractEnded(params: { id: string; isContractEnded: boolean }): Promise<void> {
+  await updateDoc(doc(db, COLLECTION_PATHS.customers, params.id), { isContractEnded: params.isContractEnded })
+}
+
+export function useSetCustomerContractEnded() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: setCustomerContractEnded,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masters', 'customers'] })
+    },
+  })
+}
+
 async function deleteCustomer(id: string): Promise<void> {
   await deleteDoc(doc(db, COLLECTION_PATHS.customers, id))
 }

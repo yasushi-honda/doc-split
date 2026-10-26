@@ -1371,6 +1371,11 @@ export function DocumentsPage() {
                     ? '条件に一致する書類がありません'
                     : 'Gmailから添付ファイルが取得されると、ここに表示されます'}
                 </p>
+                {hiddenByContractEndedCount > 0 && !hasNextPage && (
+                  <p className="mt-1 text-xs text-gray-400">
+                    契約終了の利用者の書類 {hiddenByContractEndedCount}件を非表示中(「契約終了の利用者も表示」で確認できます)
+                  </p>
+                )}
                 {/* 複数名の可能性フィルタ(PR-B)・契約終了フィルタ(Issue #1033)はクライアント側
                     フィルタのため、現在のページに該当0件でも後続ページに該当があり得る。
                     documents.length===0でもLoadMoreIndicatorを出し続けてfetchNextPageが

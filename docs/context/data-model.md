@@ -16,7 +16,7 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 | コレクション | 説明 | 書き込み元 |
 |-------------|------|-----------|
 | `documents` | 書類管理（メインテーブル） | Cloud Functions / フロントエンド（一部フィールド） |
-| `masters/{type}/items` | マスターデータ（documents/customers/offices/caremanagers） | 管理者 |
+| `masters/{type}/items` | マスターデータ（documents/customers/offices/caremanagers） | 管理者（例外: customersの`isContractEnded`のみ全スタッフが更新可） |
 | `documentGroups` | グループ別集計キャッシュ | Cloud Functions（onDocumentWriteトリガー） |
 | `errors` | エラーログ（構造化） | Cloud Functions |
 | `notifications` | エラー通知 | Cloud Functions |
@@ -224,7 +224,7 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 | furigana | string | Yes | ふりがな（照合用） |
 | careManagerName | string | No | 担当ケアマネジャー名 |
 | notes | string | No | 区別用補足情報（例: "北名古屋在住"） |
-| isContractEnded | boolean | No | 契約終了フラグ。未設定は契約中扱い。trueの場合、書類画面では既定で確認済み書類が非表示になる（Issue #1033、`/settings/app`のshowContractEndedCustomersで既定値を切替可能） |
+| isContractEnded | boolean | No | 契約終了フラグ。未設定は契約中扱い。trueの場合、書類画面では既定で確認済み・未確認（選択待ち含む）を問わず書類が非表示になる（Issue #1033、`/settings/app`のshowContractEndedCustomersで既定値を切替可能）。このフィールドのみ全スタッフが更新可（書類画面の利用者別タブから切替。2026-10-27） |
 
 ### offices（事業所）
 
@@ -245,7 +245,7 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 ### Firestoreセキュリティルール
 
 - **read**: ホワイトリスト登録ユーザー
-- **write**: 管理者のみ
+- **write**: 管理者のみ。例外として、`customers`の`isContractEnded`のみを変更する更新（他フィールドの同時変更・create・deleteは不可）はホワイトリスト登録済みの全ユーザーが可能
 
 ---
 

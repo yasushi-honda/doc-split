@@ -33,7 +33,13 @@ import {
   type DocumentGroup,
 } from '@/hooks/useDocumentGroups';
 import { useCustomers, useDocumentTypes, useContractEndedLookup } from '@/hooks/useMasters';
-import { isCustomerGroupHiddenByContractEnd } from '@/lib/contractEnded';
+import {
+  isCustomerGroupHiddenByContractEnd,
+  buildCustomerNameIndex,
+  findCustomerForGroupKey,
+  type CustomerNameIndex,
+} from '@/lib/contractEnded';
+import { ContractEndedToggle } from './ContractEndedToggle';
 import { KanaFilterBar } from '@/components/KanaFilterBar';
 import {
   buildFuriganaMap,
@@ -103,20 +109,23 @@ interface GroupItemProps {
   furiganaMap?: Map<string, string>;
   dateFilter?: DateRange;
   showContractEnded?: boolean;
+  /** 利用者別ビューのみ。契約終了切替の対象顧客を特定するための名前キー索引 */
+  customerNameIndex?: CustomerNameIndex;
   onToggle: () => void;
   onDocumentSelect?: (documentId: string) => void;
 }
 
-function GroupItem({ group, isExpanded, furiganaMap, dateFilter, showContractEnded = false, onToggle, onDocumentSelect }: GroupItemProps) {
+function GroupItem({ group, isExpanded, furiganaMap, dateFilter, showContractEnded = false, customerNameIndex, onToggle, onDocumentSelect }: GroupItemProps) {
   const config = GROUP_TYPE_CONFIG[group.groupType];
   const Icon = config.icon;
 
   return (
     <div className="border-b border-gray-100 last:border-0">
-      {/* グループヘッダー */}
+      {/* グループヘッダー(契約終了切替はbuttonの入れ子を避けて外側に並べる) */}
+      <div className="flex items-center">
       <button
         onClick={onToggle}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-gray-50"
+        className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-gray-50"
       >
         {isExpanded ? (
           <ChevronDown className="h-5 w-5 flex-shrink-0 text-gray-400" />
@@ -138,6 +147,10 @@ function GroupItem({ group, isExpanded, furiganaMap, dateFilter, showContractEnd
           </div>
         </div>
       </button>
+      {customerNameIndex && (
+        <ContractEndedToggle customer={findCustomerForGroupKey(group.groupKey, customerNameIndex)} />
+      )}
+      </div>
 
       {/* グループ内ドキュメント（展開時） */}
       {isExpanded && (
@@ -238,6 +251,10 @@ export function GroupList({ groupType, dateFilter, showContractEnded = false, on
 
   // 顧客マスター（顧客別・担当CM別のみ取得）
   const { data: customers } = useCustomers();
+  const customerNameIndex = useMemo(
+    () => (groupType === 'customer' ? buildCustomerNameIndex(customers) : undefined),
+    [groupType, customers]
+  );
   const isFuriganaReady = needsFurigana ? !!customers : true;
   // 契約終了した利用者の非表示判定(Issue #1033、顧客別タブのみグループ単位で除外)
   const contractEndedLookup = useContractEndedLookup();
@@ -491,6 +508,7 @@ export function GroupList({ groupType, dateFilter, showContractEnded = false, on
                   furiganaMap={needsFurigana ? furiganaMap : undefined}
                   dateFilter={dateFilter}
                   showContractEnded={showContractEnded}
+                  customerNameIndex={customerNameIndex}
                   onToggle={() => toggleGroup(group.id)}
                   onDocumentSelect={onDocumentSelect}
                 />
