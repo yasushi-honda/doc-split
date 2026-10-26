@@ -769,6 +769,98 @@ describe('Firestore Security Rules', () => {
       );
     });
 
+    describe('自己登録(create)の制限: 許可ドメインかつrole=userのみ', () => {
+      const outsiderUid = 'outsider-uid-001';
+      const staffUid = 'staff-uid-002';
+      const selfProfile = (email: string, role: string) => ({
+        email,
+        role,
+        createdAt: new Date(),
+        lastLoginAt: new Date(),
+      });
+      const asUser = (uid: string, email: string, verified = true) =>
+        testEnv.authenticatedContext(uid, { email, email_verified: verified }).firestore();
+
+      beforeEach(async () => {
+        await testEnv.withSecurityRulesDisabled(async (context) => {
+          await setDoc(doc(context.firestore(), 'settings', 'auth'), {
+            allowedDomains: ['example.com'],
+          });
+        });
+      });
+
+      it('許可ドメインのユーザーは role=user で自己登録できる', async () => {
+        const db = asUser(staffUid, 'staff@example.com');
+        await assertSucceeds(setDoc(doc(db, 'users', staffUid), selfProfile('staff@example.com', 'user')));
+      });
+
+      it('メールの大文字小文字が違っても許可ドメインなら登録できる', async () => {
+        const db = asUser(staffUid, 'Staff@Example.com');
+        await assertSucceeds(setDoc(doc(db, 'users', staffUid), selfProfile('staff@example.com', 'user')));
+      });
+
+      it('許可ドメインでも role=admin での自己登録は拒否される(権限昇格)', async () => {
+        const db = asUser(staffUid, 'staff@example.com');
+        await assertFails(setDoc(doc(db, 'users', staffUid), selfProfile('staff@example.com', 'admin')));
+      });
+
+      it('role が未指定・不正値の自己登録は拒否される', async () => {
+        const db = asUser(staffUid, 'staff@example.com');
+        await assertFails(setDoc(doc(db, 'users', staffUid), { email: 'staff@example.com' }));
+        await assertFails(setDoc(doc(db, 'users', staffUid), selfProfile('staff@example.com', 'owner')));
+      });
+
+      it('許可ドメイン外のユーザーは role=user でも自己登録できない(外部のGoogleアカウント)', async () => {
+        const db = asUser(outsiderUid, 'someone@gmail.com');
+        await assertFails(setDoc(doc(db, 'users', outsiderUid), selfProfile('someone@gmail.com', 'user')));
+      });
+
+      it('許可ドメイン外のユーザーが role=admin で自己登録することも拒否される', async () => {
+        const db = asUser(outsiderUid, 'someone@gmail.com');
+        await assertFails(setDoc(doc(db, 'users', outsiderUid), selfProfile('someone@gmail.com', 'admin')));
+      });
+
+      it('ドメインが許可リストの部分一致(なりすまし)では登録できない', async () => {
+        const db = asUser(outsiderUid, 'attacker@evil-example.com');
+        await assertFails(setDoc(doc(db, 'users', outsiderUid), selfProfile('attacker@evil-example.com', 'user')));
+        const db2 = asUser('uid-x', 'attacker@example.com.evil.net');
+        await assertFails(setDoc(doc(db2, 'users', 'uid-x'), selfProfile('attacker@example.com.evil.net', 'user')));
+      });
+
+      it('書き込むemailが認証トークンのemailと違う場合は拒否される', async () => {
+        const db = asUser(staffUid, 'staff@example.com');
+        await assertFails(setDoc(doc(db, 'users', staffUid), selfProfile('boss@example.com', 'user')));
+      });
+
+      it('メール未確認のユーザーは自己登録できない', async () => {
+        const db = asUser(staffUid, 'staff@example.com', false);
+        await assertFails(setDoc(doc(db, 'users', staffUid), selfProfile('staff@example.com', 'user')));
+      });
+
+      it('他人のUIDでの登録は拒否される', async () => {
+        const db = asUser(staffUid, 'staff@example.com');
+        await assertFails(setDoc(doc(db, 'users', 'someone-else'), selfProfile('staff@example.com', 'user')));
+      });
+
+      it('許可ドメインの設定(settings/auth)が無い・空のときは誰も自己登録できない(fail-closed)', async () => {
+        await testEnv.withSecurityRulesDisabled(async (context) => {
+          await deleteDoc(doc(context.firestore(), 'settings', 'auth'));
+        });
+        const db = asUser(staffUid, 'staff@example.com');
+        await assertFails(setDoc(doc(db, 'users', staffUid), selfProfile('staff@example.com', 'user')));
+      });
+
+      it('自己登録できたユーザーも、自分のroleをadminに書き換えられない', async () => {
+        const db = asUser(normalUid, 'user@example.com');
+        await assertFails(updateDoc(doc(db, 'users', normalUid), { role: 'admin' }));
+      });
+
+      it('既存の管理者は従来どおり任意のroleでユーザーを作成できる', async () => {
+        const db = asUser(adminUid, 'admin@example.com');
+        await assertSucceeds(setDoc(doc(db, 'users', 'created-by-admin'), selfProfile('x@gmail.com', 'admin')));
+      });
+    });
+
     it('一般ユーザーはユーザーを追加不可', async () => {
       const normalUser = testEnv.authenticatedContext(normalUid);
       const newUserRef = doc(normalUser.firestore(), 'users', 'new-user-001');
