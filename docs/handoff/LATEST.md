@@ -27,9 +27,10 @@
 ### 次の一手
 - 明朝(2026-10-26 09:00)のヘルスレポートで、kanameoneの待機中0・エラー0を確認する(読み取りのみ)。GOAL.md中断点(c)。
   - **2026-10-26に確認済み(件数のみ・読み取りのみ)**: ヘルスレポートを`workflow_dispatch`(`dry_run=true`、メール送信なし、run `40253116415`、10:13 JST)で実行。kanameone: 待機中0・処理中0・エラー0(処理済み24,673・分割済み1,451)。cocoro: 待機中0・処理中0・エラー0(処理済み1,915・分割済み4)。両環境ともCloud Functions 26/26稼働中。
-  - **未確認**: 3件が`processed`になった個別確認(レポートは件数のみで書類名を見ていない)。定時09:00 JST実行は、確認時点で実行履歴に未出現。
+  - **3件の個別確認(同日完了)**: 再処理時のActionsログのdoc-ID(`fix-stuck-documents`は書類名を出力しない)を指定し、Firestore REST APIのフィールドマスクで`status`等だけを読み取り。3件とも`processed`・`retryCount`=0・`PP-OCRv6_medium`。書類名・OCRテキストは取得していない。`processedAt`は10/23 15時台のまま(再処理で更新されない項目かは未確認、結論には影響しない)。定時09:00 JST実行は、確認時点で実行履歴に未出現。
+  - **DocSplitのGemini非使用の確認(同日)**: `functions/src`・全依存にGemini呼び出しなし。kanameone本番のFunctions 26本は10/7 01:42〜01:43 JSTの展開以降更新なし・`OCR_PROVIDER=paddle`/`SUMMARY_PROVIDER=sarashina`・Gemini関連環境変数なし。ただしkanameoneの`aiplatform.googleapis.com`は有効で(10/12 16:14 JSTに先方組織のアカウントが有効化)、10/12以降もVertex AI(Gemini 3.5 Flash出力)の課金が散発している。呼び出しの監査ログが無効のため呼び出し元は直接確認できず、アプリの動きとは合わない散発パターンから「DocSplit由来ではない可能性が高い」と判断(未確定)。API再無効化・Editor権限整理・監査ログ有効化は先方環境への操作のため未実施(decision-maker判断)。
   - **ログの`BucketNotFoundException: gs://docsplit-kanameone.appspot.com`は想定内**: `scripts/health-report/lib/gcp-collector.js`が`.appspot.com`→`.firebasestorage.app`の順に試す作りで、kanameoneの実バケットは後者(`scripts/clients/kanameone.env`)。2回目で容量(2.8GB)は取得できている。対応不要。
-  - **完了連絡**: 送付はdecision-maker判断。個別確認ができていないため、元の文面の「処理済みになったことを確認」は「エラー・待機中が0件」の範囲に直す案を提示済み(未送付)。
+  - **完了連絡**: 送付はdecision-maker判断(未送付)。3件の個別確認が済んだため、元の文面(「処理済みになったことを確認しました」)をそのまま使える。
 
 ## Issue Net変化(2026-10-25)
 - Close 0件、起票 0件、Net 0(openのIssueは3件: #956・#901・#238)。起票しなかった理由: 原因確定・修正・展開まで本セッションで完了しており、triage基準を満たす未解決の実害が残らないため。
