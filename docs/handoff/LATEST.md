@@ -26,6 +26,10 @@
 
 ### 次の一手
 - 明朝(2026-10-26 09:00)のヘルスレポートで、kanameoneの待機中0・エラー0を確認する(読み取りのみ)。GOAL.md中断点(c)。
+  - **2026-10-26に確認済み(件数のみ・読み取りのみ)**: ヘルスレポートを`workflow_dispatch`(`dry_run=true`、メール送信なし、run `40253116415`、10:13 JST)で実行。kanameone: 待機中0・処理中0・エラー0(処理済み24,673・分割済み1,451)。cocoro: 待機中0・処理中0・エラー0(処理済み1,915・分割済み4)。両環境ともCloud Functions 26/26稼働中。
+  - **未確認**: 3件が`processed`になった個別確認(レポートは件数のみで書類名を見ていない)。定時09:00 JST実行は、確認時点で実行履歴に未出現。
+  - **ログの`BucketNotFoundException: gs://docsplit-kanameone.appspot.com`は想定内**: `scripts/health-report/lib/gcp-collector.js`が`.appspot.com`→`.firebasestorage.app`の順に試す作りで、kanameoneの実バケットは後者(`scripts/clients/kanameone.env`)。2回目で容量(2.8GB)は取得できている。対応不要。
+  - **完了連絡**: 送付はdecision-maker判断。個別確認ができていないため、元の文面の「処理済みになったことを確認」は「エラー・待機中が0件」の範囲に直す案を提示済み(未送付)。
 
 ## Issue Net変化(2026-10-25)
 - Close 0件、起票 0件、Net 0(openのIssueは3件: #956・#901・#238)。起票しなかった理由: 原因確定・修正・展開まで本セッションで完了しており、triage基準を満たす未解決の実害が残らないため。
