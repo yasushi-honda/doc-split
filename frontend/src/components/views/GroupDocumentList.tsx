@@ -23,8 +23,8 @@ import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
 import { DocumentListUpdateBanner } from '@/components/DocumentListUpdateBanner';
 import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
 import { useReprocessDocument } from '@/hooks/useDocuments';
-import { useDocumentTypes, useCustomerIdentityLookup, useContractEndedLookup, type CustomerIdentityLookup } from '@/hooks/useMasters';
-import { isDocumentHiddenByContractEnd } from '@/lib/contractEnded';
+import { useDocumentTypes, useCustomers, useCustomerIdentityLookup, useContractEndedLookup, type CustomerIdentityLookup } from '@/hooks/useMasters';
+import { isDocumentHiddenByContractEnd, buildCustomerNameIndex } from '@/lib/contractEnded';
 import {
   useGroupDocuments,
   groupDocumentsQueryKey,
@@ -395,6 +395,14 @@ export function GroupDocumentList({
   );
   const hiddenByContractEndedCount = allDocuments.length - visibleDocuments.length;
 
+  // 担当CM別の利用者行に契約終了切替ボタンを出すための名前キー索引(2026-10-27、kaname要望)。
+  // useCustomers()のキャッシュ共有により追加フェッチなし。他のgroupTypeでは使わないため作らない
+  const { data: customerMasters } = useCustomers();
+  const customerNameIndex = useMemo(
+    () => (groupType === 'careManager' ? buildCustomerNameIndex(customerMasters) : undefined),
+    [groupType, customerMasters]
+  );
+
   // ローディング（初回）
   if (isLoading) {
     return (
@@ -531,6 +539,7 @@ export function GroupDocumentList({
                 onDocumentSelect={onDocumentSelect}
                 onRetry={setRetryTarget}
                 identityLookup={identityLookup}
+                customerNameIndex={customerNameIndex}
               />
             </>
           ) : (

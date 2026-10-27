@@ -6,12 +6,19 @@
  * resolveCustomerUnconfirmedReason経由の「同姓同名」バッジ配線をコンポーネントテストする。
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { Timestamp } from 'firebase/firestore'
 import type { Document } from '@shared/types'
 import type { CustomerIdentityLookup } from '@/hooks/useMasters'
+import type { CustomerMaster } from '@shared/types'
+import { buildCustomerNameIndex } from '@/lib/contractEnded'
 import { CustomerSubGroup } from '../views/CustomerSubGroup'
+
+// 契約終了切替(ContractEndedToggle)が使う更新フックのみをモックする(QueryClient不要にする)
+vi.mock('@/hooks/useMasters', () => ({
+  useSetCustomerContractEnded: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}))
 
 const makeDocument = (overrides: Partial<Document> = {}): Document => ({
   id: 'doc-001',
@@ -121,5 +128,74 @@ describe('CustomerSubGroup - 同姓同名バッジ', () => {
     )
     expandToDocumentRow('松本 実', 'ケアプラン')
     expect(screen.getByText('同姓同名')).toBeDefined()
+  })
+})
+
+describe('CustomerSubGroup - 契約終了ボタン(担当CM別、2026-10-27)', () => {
+  const master = (overrides: Partial<CustomerMaster> & { id: string; name: string }): CustomerMaster => overrides
+
+  it('customerNameIndex未指定(他のタブ等)ではボタンを出さない(後方互換)', () => {
+    render(<CustomerSubGroup documents={[makeDocument({ customerKey: '松本実' })]} />)
+    expect(screen.queryByRole('button', { name: '契約終了にする' })).toBeNull()
+  })
+
+  it('名前キーが一意の顧客の行には「契約終了にする」を出す', () => {
+    const index = buildCustomerNameIndex([master({ id: 'a', name: '松本 実' })])
+    render(
+      <CustomerSubGroup
+        documents={[makeDocument({ customerKey: '松本実' })]}
+        customerNameIndex={index}
+      />
+    )
+    expect(screen.getByRole('button', { name: '契約終了にする' })).toBeDefined()
+  })
+
+  it('同姓同名(名前キーが一致する顧客が複数)の行にはボタンを出さない', () => {
+    const index = buildCustomerNameIndex([
+      master({ id: 'a', name: '松本 実' }),
+      master({ id: 'b', name: '松本　実' }),
+    ])
+    render(
+      <CustomerSubGroup
+        documents={[makeDocument({ customerKey: '松本実' })]}
+        customerNameIndex={index}
+      />
+    )
+    expect(screen.queryByRole('button', { name: '契約終了にする' })).toBeNull()
+  })
+
+  it('マスター未登録の顧客(例: 未判定)の行にはボタンを出さない', () => {
+    const index = buildCustomerNameIndex([master({ id: 'a', name: '別の人' })])
+    render(
+      <CustomerSubGroup
+        documents={[makeDocument({ customerKey: '松本実' })]}
+        customerNameIndex={index}
+      />
+    )
+    expect(screen.queryByRole('button', { name: '契約終了にする' })).toBeNull()
+  })
+
+  it('契約終了の顧客の行には「契約終了」バッジと「契約中に戻す」を出す', () => {
+    const index = buildCustomerNameIndex([master({ id: 'a', name: '松本 実', isContractEnded: true })])
+    render(
+      <CustomerSubGroup
+        documents={[makeDocument({ customerKey: '松本実' })]}
+        customerNameIndex={index}
+      />
+    )
+    expect(screen.getByText('契約終了')).toBeDefined()
+    expect(screen.getByRole('button', { name: '契約中に戻す' })).toBeDefined()
+  })
+
+  it('切替ボタンを押しても利用者行の展開は発火しない', () => {
+    const index = buildCustomerNameIndex([master({ id: 'a', name: '松本 実' })])
+    render(
+      <CustomerSubGroup
+        documents={[makeDocument({ customerKey: '松本実' })]}
+        customerNameIndex={index}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: '契約終了にする' }))
+    expect(screen.queryByText(/ケアプラン/)).toBeNull()
   })
 })

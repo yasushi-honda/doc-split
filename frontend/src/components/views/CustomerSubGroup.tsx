@@ -18,6 +18,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
 import type { CustomerIdentityLookup } from '@/hooks/useMasters';
+import { findCustomerForGroupKey, type CustomerNameIndex } from '@/lib/contractEnded';
+import { normalizeGroupKey } from '@/lib/normalizeGroupKey';
+import { ContractEndedToggle } from './ContractEndedToggle';
 import { getStatusConfig, formatTimestamp } from '@/lib/documentUtils';
 import { getDisplayFileName } from '@/utils/getDisplayFileName';
 import {
@@ -42,6 +45,11 @@ interface CustomerSubGroupProps {
   onRetry?: (document: Document) => void;
   /** 同姓同名バッジ判定用(未指定時は「選択待ち」のみ、同姓同名バッジは出さない) */
   identityLookup?: CustomerIdentityLookup;
+  /**
+   * 契約終了切替ボタンの対象顧客を特定する名前キー索引(担当CM別のみ)。
+   * 未指定時はボタンを出さない(ContractEndedToggleはQueryClientを要するため、渡されたときだけ描画する)
+   */
+  customerNameIndex?: CustomerNameIndex;
 }
 
 interface CustomerGroup {
@@ -291,6 +299,7 @@ interface CustomerGroupItemProps {
   onDocumentSelect?: (documentId: string) => void;
   onRetry?: (document: Document) => void;
   identityLookup?: CustomerIdentityLookup;
+  customerNameIndex?: CustomerNameIndex;
 }
 
 function CustomerGroupItem({
@@ -301,6 +310,7 @@ function CustomerGroupItem({
   onDocumentSelect,
   onRetry,
   identityLookup,
+  customerNameIndex,
 }: CustomerGroupItemProps) {
   // フォルダサブグループの展開状態 (#527)。顧客を閉じると状態ごと破棄される
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
@@ -323,10 +333,11 @@ function CustomerGroupItem({
 
   return (
     <div className="border-b border-gray-100 last:border-0">
-      {/* 顧客グループヘッダー */}
+      {/* 顧客グループヘッダー(契約終了切替はbuttonの入れ子を避けて外側に並べる。狭い画面では次の行へ折り返す) */}
+      <div className="flex flex-wrap items-center">
       <button
         onClick={onToggle}
-        className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-gray-100"
+        className="flex min-w-0 flex-1 basis-56 items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-gray-100"
       >
         {isExpanded ? (
           <ChevronDown className="h-4 w-4 flex-shrink-0 text-gray-400" />
@@ -348,6 +359,12 @@ function CustomerGroupItem({
           </div>
         </div>
       </button>
+      {customerNameIndex && (
+        <ContractEndedToggle
+          customer={findCustomerForGroupKey(normalizeGroupKey(group.customerKey), customerNameIndex)}
+        />
+      )}
+      </div>
 
       {/* 顧客グループ内のフォルダサブグループ（展開時、#527: 4 階層化） */}
       {isExpanded && (
@@ -380,6 +397,7 @@ export function CustomerSubGroup({
   onDocumentSelect,
   onRetry,
   identityLookup,
+  customerNameIndex,
 }: CustomerSubGroupProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
@@ -421,6 +439,7 @@ export function CustomerSubGroup({
           onDocumentSelect={onDocumentSelect}
           onRetry={onRetry}
           identityLookup={identityLookup}
+          customerNameIndex={customerNameIndex}
         />
       ))}
     </div>
