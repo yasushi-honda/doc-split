@@ -1,6 +1,31 @@
 # ハンドオフメモ
 
-**更新日**: 2026-10-25（kanameoneの大判PDF 3件の`422 PIXEL_LIMIT_EXCEEDED`を原因確定・修正(PR #1171)・dev検証・2環境展開・再処理まで完了。以前: 2026-10-21（Gemini廃止後のCloud Run AI環境の3環境健全性確認・起動プローブ改善の当てはめ確認まで完了、kanameone `signal 9` 2件は経過観察）。以前: 2026-10-18（大判PDFのpaddle-ocr `signal 9`の実測・dev再現・長辺上限の適用・3環境展開まで完了。以前: 2026-10-15（Gemini廃止後の約1週間の稼働確認・散発ERRORの調査・GOAL.md訂正まで完了）。以前: 2026-10-10（Paddleの高画素数画像のメモリ不足の対応完了）。以前の履歴は各節と`docs/handoff/archive/`を参照））
+**更新日**: 2026-10-27（かなめ様の修整依頼(契約終了の未確認書類・全スタッフ切替・CSV上書き既定ON)をdev/kanameoneへ反映、`users`ルールの権限昇格の穴を修正・反映。以前: 2026-10-25（kanameoneの大判PDF 3件の`422 PIXEL_LIMIT_EXCEEDED`を原因確定・修正(PR #1171)・dev検証・2環境展開・再処理まで完了。以前: 2026-10-21（Gemini廃止後のCloud Run AI環境の3環境健全性確認・起動プローブ改善の当てはめ確認まで完了、kanameone `signal 9` 2件は経過観察）。以前: 2026-10-18（大判PDFのpaddle-ocr `signal 9`の実測・dev再現・長辺上限の適用・3環境展開まで完了。以前: 2026-10-15（Gemini廃止後の約1週間の稼働確認・散発ERRORの調査・GOAL.md訂正まで完了）。以前: 2026-10-10（Paddleの高画素数画像のメモリ不足の対応完了）。以前の履歴は各節と`docs/handoff/archive/`を参照））
+
+## かなめ様の修整依頼への対応と、`users`ルールの権限昇格の穴の修正（2026-10-27、PR #1185・#1186）
+
+### 結果
+- **依頼(1)(2)**: PR #1185。契約終了の利用者の書類を、確認済み・未確認・選択待ちを問わず既定で非表示(`contractEnded.ts`の`verified`早期return削除)。顧客の`isContractEnded`のみ、全スタッフが「顧客別」タブの見出し(`ContractEndedToggle`)から切替可能(Firestoreルールは`masters/customers`の`isContractEnded`1項目の更新のみ許可)。CSVインポートの部分一致行は上書き既定ON(同姓同名・CSV内同名行・同一既存レコードを狙う行は従来既定。照合時のスナップショットで同名件数を数える)。
+- **依頼(3)**: 実装なし。返答済み(空白の揺れは`normalizeName`/`normalizeGroupKey`で吸収済み、姓名は追加項目なら一斉移行不要、境目はスペースだけでは決まらない)。
+- **穴の発見と修正**: PR #1186。`users`の`create`が認証済みなら誰でも任意`role`で自己登録できた(エミュレータで`role:'admin'`登録→顧客マスターの読み書き・削除まで実証)。ルール側で`role=='user'`・メール確認済み・`email`一致・`settings/auth.allowedDomains`完全一致(未設定はfail-closed)を強制。
+- **反映**: 2PRともdev(main自動)とkanameone(`Deploy Firestore Rules`/`Deploy Firebase Hosting`、環境=kanameone)へ反映済み。ルールはデプロイログの`released rules`、フロントは配信バンドルの文言で確認。cocoroは停止中のため対象外。
+- **検証**: ルール123件・functions 2547件・frontend 964件PASS、CI全PASS、`codex review`(#1185は指摘2段階を反映・#1186は0件)、pr-review-toolkit 3本。UIはローカルのエミュレータで一般スタッフ権限(1080px/375px)を確認し、PRコメントに記録して`ui-verified`付与。
+- **クライアント返信**: decision-makerが2026-10-27に送付済み。
+
+### 未確認・残した点
+- **kanameoneのOAuth同意画面(内部/外部)は未確認**(APIで読めず、Google Auth Platformの「対象」を要確認)。「外部」なら修正前は外部のGoogleアカウントが穴を突けた。`users`の集計(20件、許可ドメイン外0件)では、外部からの登録の形跡なし。
+- **kanameoneの管理者が10人**(全員`kanameone.com`、2026-07-29に4人が同日作成)。正規のスタッフかは未確認。decision-makerが管理画面のユーザー管理で確認する。
+- **CSVインポート画面の実画面確認は未実施**(コンポーネントテストのみ)。契約終了ボタンは画面確認済み。
+- **ルールは新規自己登録のみ変更**。新規スタッフが初回ログインで登録できることは、実際に新しい方が現れた時に確認する(できなければ`settings/auth.allowedDomains`を確認)。
+- 同姓同名の利用者はスタッフが切替できない(管理者がマスター画面で設定)。仕様上の例外として返信に記載済み。
+- Auth設定を読む際、パスワードハッシュ設定の署名鍵が会話の記録に出力された(リポジトリ・外部には出ていない。メール/パスワードログインは無効)。以後は値を出さず有無だけ確認する。
+
+### 進め方の反省
+- 既存E2E(`contract-ended-hide.spec.ts`)が旧仕様(未確認は常に表示)を前提にしており、変更前に気づけなかった(レビュー前に修正済み)。仕様を反転させる変更は、既存テストの前提を先に洗い出す。
+- 狭い画面(375px)で顧客名が切れていた。UI変更は最初にモバイル幅まで画面で確認する。
+- devの反映状態の確認(ルールのログ・配信バンドル)を済ませる前に本番反映へ進みかけた。dev→クライアントの順序と、各環境の反映確認を守る。
+- ローカルのNode 26ではmochaが動かない(`require is not defined in ES module scope`)。テストは`PATH=/opt/homebrew/opt/node@20/bin:$PATH`で実行する。コミット後フックの`test`警告はこれが原因で、コードの問題ではない。
+
 
 ## 大判PDFの`422 PIXEL_LIMIT_EXCEEDED`: 縮小前の画素数判定を縮小後に修正（2026-10-25、PR #1171、ADR-0030追記）
 
