@@ -601,3 +601,108 @@ describe('PdfSplitModal - ステップ1レイアウトのモバイル対応 (Iss
     expect(columnsContainer?.className).toContain('sm:flex-row')
   })
 })
+
+describe('PdfSplitModal - 全ページを1ページずつに分割(かなめ様要望、2026-10-27)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const renderModal = (doc: Document) =>
+    render(
+      <PdfSplitModal
+        document={doc}
+        isOpen={true}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+        detailLoading={false}
+        detailError={false}
+      />
+    )
+
+  const everyPageButton = () => screen.getByRole('button', { name: /1ページずつ分割/ })
+
+  it('押すと全ページの後に分割ポイントが入り、確認ステップのセグメント数がページ数になる', async () => {
+    renderModal(makeDocument({ totalPages: 5, splitSuggestions: [] }))
+    fireEvent.click(everyPageButton())
+    expect(screen.getByText('5件の書類に分割します')).toBeDefined()
+
+    fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
+    await screen.findByRole('button', { name: /分割を実行/ })
+    expect(screen.getByText(/セグメント 5/)).toBeDefined()
+    expect(screen.queryByText(/セグメント 6/)).toBeNull()
+  })
+
+  it('既存の分割ポイント・手動編集を置き換え、古い編集が新しいセグメントに残らない', async () => {
+    renderModal(
+      makeDocument({
+        totalPages: 4,
+        splitSuggestions: [
+          { afterPageNumber: 2, reason: 'manual', confidence: 100, newDocumentType: null, newCustomerName: null },
+        ],
+      })
+    )
+    // 一度確認ステップで手動編集を入れてから戻る
+    fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
+    await screen.findByRole('button', { name: /分割を実行/ })
+    fireEvent.click(screen.getAllByRole('button', { name: 'edit-customer' })[0]!)
+    expect(screen.getAllByText('手動編集-customer').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: '戻る' }))
+
+    fireEvent.click(everyPageButton())
+    fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
+    await screen.findByRole('button', { name: /分割を実行/ })
+    expect(screen.getByText(/セグメント 4/)).toBeDefined()
+    expect(screen.queryByText('手動編集-customer')).toBeNull()
+  })
+
+  it('自動検出の結果がある状態で押しても、一括分割の結果が反映される(detectedSegmentsを優先して無視されない)', async () => {
+    mockDetectSplitPointsMutateAsync.mockResolvedValue({
+      suggestions: [{ afterPageNumber: 2, reason: 'manual', confidence: 90 }],
+      segments: [
+        { startPage: 1, endPage: 2, documentType: 'A', customerName: '甲', customerId: null, officeName: 'x' },
+        { startPage: 3, endPage: 4, documentType: 'B', customerName: '乙', customerId: null, officeName: 'x' },
+      ],
+      shouldSplit: true,
+    })
+    renderModal(makeDocument({ totalPages: 4, splitSuggestions: [] }))
+    fireEvent.click(screen.getByRole('button', { name: /自動検出/ }))
+    await screen.findByText('1件の分割ポイントを検出しました')
+
+    fireEvent.click(everyPageButton())
+    fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
+    await screen.findByRole('button', { name: /分割を実行/ })
+    expect(screen.getByText(/セグメント 4/)).toBeDefined()
+  })
+
+  it('一括分割のあと分割ポイントを1つ外すと、セグメントが1つ減る', async () => {
+    renderModal(makeDocument({ totalPages: 3, splitSuggestions: [] }))
+    fireEvent.click(everyPageButton())
+    // 分割ポイント「ページ 1 の後」を削除(右パネルの削除ボタンは分割ポイントごとに1つ)
+    const removeButtons = screen
+      .getAllByRole('button')
+      .filter((b) => b.querySelector('svg.lucide-trash2, svg.lucide-trash-2'))
+    expect(removeButtons.length).toBeGreaterThan(0)
+    fireEvent.click(removeButtons[0]!)
+
+    fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
+    await screen.findByRole('button', { name: /分割を実行/ })
+    expect(screen.getByText(/セグメント 2/)).toBeDefined()
+    expect(screen.queryByText(/セグメント 3/)).toBeNull()
+  })
+
+  it('1ページのPDFにはボタンを出さない', () => {
+    renderModal(makeDocument({ totalPages: 1, splitSuggestions: [] }))
+    expect(screen.queryByRole('button', { name: /1ページずつ分割/ })).toBeNull()
+  })
+
+  it('バックエンドの上限(249件)を超えるページ数ではボタンを無効にして理由を表示する', () => {
+    renderModal(makeDocument({ totalPages: 250, splitSuggestions: [] }))
+    expect(isDisabled(everyPageButton())).toBe(true)
+    expect(screen.getByText(/249ページ以下/)).toBeDefined()
+  })
+
+  it('249ページちょうどは有効', () => {
+    renderModal(makeDocument({ totalPages: 249, splitSuggestions: [] }))
+    expect(isDisabled(everyPageButton())).toBe(false)
+  })
+})
