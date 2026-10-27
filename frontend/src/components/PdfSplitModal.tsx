@@ -57,6 +57,10 @@ interface PdfSplitModalProps {
   detailError: boolean
 }
 
+/** 「全ページを1ページずつ分割」の対象上限。バックエンドの splitPdf が segments.length > 249 を拒否する
+ * (Firestore batch 500 write上限: functions/src/pdf/pdfOperations.ts)ため、それに合わせる */
+const MAX_EVERY_PAGE_SPLIT = 249
+
 export function PdfSplitModal({
   document,
   isOpen,
@@ -249,6 +253,23 @@ export function PdfSplitModal({
         message: '検出に失敗しました。再度お試しください。',
       })
     }
+  }
+
+  // 全ページを1ページずつに分割(かなめ様要望 2026-10-27: 数十枚のPDFを1ページずつ手動で
+  // 分割するのが大変)。splitPoints を [1..totalPages-1] に入れ替える。
+  // 自動検出の再実行と同じく、セグメント構成が丸ごと入れ替わるため segmentEdits(indexキー)を
+  // クリアする。さらに detectedSegments が残っていると segments がそちらを優先して
+  // splitPoints を無視するため、これも空にする(空にしないと一括分割が確認画面に反映されない)。
+  // 上限はバックエンド splitPdf の segments.length ≤ 249 に合わせる(MAX_EVERY_PAGE_SPLIT)。
+  const handleSplitEveryPage = () => {
+    const points = Array.from({ length: document.totalPages - 1 }, (_, i) => i + 1)
+    setSplitPoints(points)
+    setSegmentEdits(new Map())
+    setDetectedSegments(null)
+    setDetectResultMessage({
+      type: 'info',
+      message: `${document.totalPages}件の書類に分割します`,
+    })
   }
 
   // 分割ポイントを追加
@@ -535,6 +556,28 @@ export function PdfSplitModal({
                   自動検出
                 </Button>
               </div>
+
+              {/* 全ページを1ページずつに分割(1ページのPDFには出さない) */}
+              {document.totalPages >= 2 && (
+                <div className="mb-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={handleSplitEveryPage}
+                    // 自動検出の実行中は、あとから届く検出結果が一括分割の結果を上書きするため押せなくする
+                    disabled={document.totalPages > MAX_EVERY_PAGE_SPLIT || detectSplitPoints.isPending}
+                  >
+                    <Scissors className="h-4 w-4 mr-2" />
+                    全ページを1ページずつ分割
+                  </Button>
+                  {document.totalPages > MAX_EVERY_PAGE_SPLIT && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      {MAX_EVERY_PAGE_SPLIT}ページ以下のファイルが対象です
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* 自動検出結果メッセージ */}
               {detectResultMessage && (
