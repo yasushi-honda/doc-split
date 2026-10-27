@@ -71,12 +71,14 @@ vi.mock('@/hooks/useDocuments', async () => {
 // 分割系mutation（Cloud Functions呼び出し）をバイパス。isPending: false固定。
 const mockSplitPdfMutateAsync = vi.fn().mockResolvedValue({ success: true, createdDocuments: [] })
 const mockDetectSplitPointsMutateAsync = vi.fn()
+// 自動検出の実行中(isPending)を再現するための可変フラグ(既定false。各テストで必要なときだけtrueにする)
+let mockDetectPending = false
 const mockRotatePdfMutateAsync = vi.fn().mockResolvedValue({ success: true })
 vi.mock('@/hooks/usePdfSplit', async () => {
   const actual = await vi.importActual<typeof import('@/hooks/usePdfSplit')>('@/hooks/usePdfSplit')
   return {
     ...actual,
-    useDetectSplitPoints: () => ({ mutateAsync: mockDetectSplitPointsMutateAsync, isPending: false }),
+    useDetectSplitPoints: () => ({ mutateAsync: mockDetectSplitPointsMutateAsync, isPending: mockDetectPending }),
     useSplitPdf: () => ({ mutateAsync: mockSplitPdfMutateAsync, isPending: false }),
     useRotatePdfPages: () => ({ mutateAsync: mockRotatePdfMutateAsync, isPending: false }),
   }
@@ -605,6 +607,7 @@ describe('PdfSplitModal - ステップ1レイアウトのモバイル対応 (Iss
 describe('PdfSplitModal - 全ページを1ページずつに分割(かなめ様要望、2026-10-27)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockDetectPending = false
   })
 
   const renderModal = (doc: Document) =>
@@ -704,5 +707,11 @@ describe('PdfSplitModal - 全ページを1ページずつに分割(かなめ様�
   it('249ページちょうどは有効', () => {
     renderModal(makeDocument({ totalPages: 249, splitSuggestions: [] }))
     expect(isDisabled(everyPageButton())).toBe(false)
+  })
+
+  it('自動検出の実行中は無効にする(検出結果があとから一括分割を上書きするのを防ぐ。codex review指摘)', () => {
+    mockDetectPending = true
+    renderModal(makeDocument({ totalPages: 5, splitSuggestions: [] }))
+    expect(isDisabled(everyPageButton())).toBe(true)
   })
 })

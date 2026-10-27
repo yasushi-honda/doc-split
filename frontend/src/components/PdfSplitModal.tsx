@@ -565,7 +565,8 @@ export function PdfSplitModal({
                     size="sm"
                     className="w-full"
                     onClick={handleSplitEveryPage}
-                    disabled={document.totalPages > MAX_EVERY_PAGE_SPLIT}
+                    // 自動検出の実行中は、あとから届く検出結果が一括分割の結果を上書きするため押せなくする
+                    disabled={document.totalPages > MAX_EVERY_PAGE_SPLIT || detectSplitPoints.isPending}
                   >
                     <Scissors className="h-4 w-4 mr-2" />
                     全ページを1ページずつ分割
