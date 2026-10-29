@@ -135,6 +135,7 @@ on:
           - measure-field-byte-sizes
           - measure-field-byte-sizes --limit 300
           - measure-split-into-length
+          - measure-split-pdf-timing
           - diagnose-confirmed-replay-sampling
           - diagnose-confirmed-replay-sampling --doc-id
           - backfill-detail-subcollection --audit
@@ -1214,6 +1215,8 @@ jobs:
           FILE_NAME: ${{ github.event.inputs.file_name }}
           DOC_ID: ${{ github.event.inputs.doc_id }}
           STORAGE_BUCKET: ${{ steps.resolve.outputs.storage_bucket }}
+          # measure-split-pdf-timing(dev専用)のID token取得用。dev以外の実行には渡さない
+          FIREBASE_WEB_API_KEY: ${{ github.event.inputs.environment == 'dev' && secrets.VITE_FIREBASE_API_KEY || '' }}
           OPERATION_IDS_CSV: ${{ steps.parse_exec.outputs.operation_ids_csv }}
           DELETE_IDS: ${{ github.event.inputs.delete_ids }}
           OFFICE_NAMES: ${{ github.event.inputs.office_names }}
@@ -1853,6 +1856,7 @@ jobs:
                [ "$SCRIPT_NAME" = "clear-unmarked-pending-summary" ] || \
                [ "$SCRIPT_NAME" = "backfill-detail-subcollection" ] || \
                [ "$SCRIPT_NAME" = "create-pending-doc" ] || \
+               [ "$SCRIPT_NAME" = "measure-split-pdf-timing" ] || \
                [ "$SCRIPT_NAME" = "backfill-drive-export" ] || \
                [ "$SCRIPT_NAME" = "backfill-confirm-on-verify" ] || \
                [ "$SCRIPT_NAME" = "backfill-customer-id-link" ] || \
