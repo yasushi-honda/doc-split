@@ -138,7 +138,6 @@ async function main(): Promise<void> {
   const runId = `${Date.now()}`;
   const docId = `split-timing-${runId}`;
   const sourcePath = `original/${docId}.pdf`;
-  const childIds: string[] = [];
 
   try {
     const t0 = Date.now();
@@ -179,9 +178,17 @@ async function main(): Promise<void> {
 
     // 先頭から1ページずつ(最大248件)+残りを1セグメントにまとめて、合計 min(pages,249) 分割にする
     const segmentCount = Math.min(pages, MAX_SEGMENTS);
-    const segments: { startPage: number; endPage: number }[] = [];
-    for (let p = 1; p < segmentCount; p++) segments.push({ startPage: p, endPage: p });
-    segments.push({ startPage: segmentCount, endPage: pages });
+    // documentType/customerName/officeNameはsplitPdfが子docにそのまま書くため必須(undefinedはFirestoreに拒否される)
+    const segment = (startPage: number, endPage: number) => ({
+      startPage,
+      endPage,
+      documentType: '',
+      customerName: '',
+      officeName: '',
+    });
+    const segments = [] as ReturnType<typeof segment>[];
+    for (let p = 1; p < segmentCount; p++) segments.push(segment(p, p));
+    segments.push(segment(segmentCount, pages));
     const splitPoints = segments.slice(1).map((s) => s.startPage - 1);
 
     const idToken = await getIdToken();
@@ -205,18 +212,23 @@ async function main(): Promise<void> {
         result?: { createdDocuments?: string[] };
         error?: { status?: string; message?: string };
       };
-      childIds.push(...(body.result?.createdDocuments ?? []));
       console.log(
-        `RESULT: HTTP ${res.status} elapsed=${elapsed}s created=${childIds.length} ` +
+        `RESULT: HTTP ${res.status} elapsed=${elapsed}s created=${body.result?.createdDocuments?.length ?? 0} ` +
           `error=${body.error ? `${body.error.status}: ${body.error.message}` : 'none'}`
       );
     }
   } finally {
-    await cleanup(docId, sourcePath, childIds);
+    await cleanup(docId, sourcePath);
   }
 }
 
-async function cleanup(docId: string, sourcePath: string, childIds: string[]): Promise<void> {
+async function cleanup(docId: string, sourcePath: string): Promise<void> {
+  // 応答を受け取れなかった場合(通信断・クライアントタイムアウト)でもサーバー側でsplitが
+  // commit済みのことがあるため、子docは応答ではなくparentDocumentIdのクエリで拾う。
+  // 子はstatus:'pending'でOCRパイプラインの対象になるので取り残さない
+  const childIds = (await db.collection('documents').where('parentDocumentId', '==', docId).select().get()).docs.map(
+    (d) => d.id
+  );
   console.log(`[cleanup] 親1件・子${childIds.length}件・fixtureユーザーを削除`);
   const refs = [docId, ...childIds].flatMap((id) => {
     const ref = db.collection('documents').doc(id);
