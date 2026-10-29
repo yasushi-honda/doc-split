@@ -64,6 +64,14 @@ describe('GroupList の契約終了切替の配線', () => {
     expect(screen.getAllByRole('button', { name: '契約終了にする' })).toHaveLength(1)
   })
 
+  it('利用者別: 保存値「不明顧客」のグループ見出しは「不明利用者」と表示する(groupKeyは保存値のまま)', () => {
+    mockGroups('customer', [group('不明顧客', '不明顧客', 'customer')])
+    render(<GroupList groupType="customer" />)
+    expect(screen.getByText('不明利用者')).toBeDefined()
+    expect(screen.queryByText('不明顧客')).toBeNull()
+    expect(screen.queryByRole('button', { name: '契約終了にする' })).toBeNull()
+  })
+
   it('利用者別以外のタブ(事業所別)では出さない', () => {
     mockGroups('office', [group('田中太郎', '田中太郎', 'office')])
     render(<GroupList groupType="office" />)

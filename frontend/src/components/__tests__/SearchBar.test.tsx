@@ -163,3 +163,32 @@ describe('SearchBar — 書類種別「不明」表記の共有sentinel統一 (I
     expect(screen.getByText('不明文書')).toBeDefined()
   })
 })
+
+describe('SearchBar — 保存値「不明顧客」の候補表示', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const resultWith = (customerName: string) => ({
+    id: 'doc-3',
+    fileName: 'sample3.pdf',
+    customerName,
+    officeName: 'テスト事業所',
+    documentType: '請求書',
+    fileDate: '2026-05-17',
+    score: 1.0,
+  })
+
+  it('customerNameが保存値「不明顧客」のとき「不明利用者」を表示する', () => {
+    setupMockedSearch({ results: [resultWith('不明顧客')] })
+    renderAndOpen()
+    expect(screen.getByText('不明利用者')).toBeDefined()
+    expect(screen.queryByText('不明顧客')).toBeNull()
+  })
+
+  it('customerNameが空文字のときも「不明利用者」を表示する(フォールバック)', () => {
+    setupMockedSearch({ results: [resultWith('')] })
+    renderAndOpen()
+    expect(screen.getByText('不明利用者')).toBeDefined()
+  })
+})

@@ -415,3 +415,51 @@ describe('GroupDocumentList - 契約終了した利用者の非表示(Issue #103
     expect(screen.getByText(/契約終了の利用者の書類 1件を非表示中/)).toBeDefined()
   })
 })
+
+// 保存値'不明顧客'は画面表示の直前だけ「不明利用者」にする(formatCustomerNameForDisplay)。
+// 事業所別・書類種別別の行は、サブ情報として利用者名を出すため適用が必要
+describe('GroupDocumentList - 保存値「不明顧客」の行サブ情報の表示', () => {
+  beforeEach(() => {
+    mockUseGroupDocuments.mockReset()
+  })
+
+  it.each(['office', 'documentType'] as const)(
+    '%s別の行のサブ情報は「不明顧客」でなく「不明利用者」を表示する',
+    (groupType) => {
+      mockUseGroupDocuments.mockReturnValue({
+        data: { pages: [{ documents: [makeDocument({ id: 'doc-u1', customerName: '不明顧客', fileName: 'u1.pdf' })], lastDoc: null, hasMore: false }] },
+        fetchNextPage: vi.fn(),
+        hasNextPage: false,
+        isFetchingNextPage: false,
+        isFetchNextPageError: false,
+        isLoading: false,
+        isError: false,
+        isRefetching: false,
+        refetch: vi.fn(),
+      })
+
+      renderWithClient(<GroupDocumentList groupType={groupType} groupKey="key-1" />)
+
+      expect(screen.getByText('不明利用者')).toBeDefined()
+      expect(screen.queryByText('不明顧客')).toBeNull()
+    }
+  )
+
+  it('実在の利用者名はそのまま表示する(置換は完全一致のみ)', () => {
+    mockUseGroupDocuments.mockReturnValue({
+      data: { pages: [{ documents: [makeDocument({ id: 'doc-u2', customerName: '松本 実', fileName: 'u2.pdf' })], lastDoc: null, hasMore: false }] },
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isFetchNextPageError: false,
+      isLoading: false,
+      isError: false,
+      isRefetching: false,
+      refetch: vi.fn(),
+    })
+
+    renderWithClient(<GroupDocumentList groupType="office" groupKey="key-1" />)
+
+    expect(screen.getByText('松本 実')).toBeDefined()
+  })
+})

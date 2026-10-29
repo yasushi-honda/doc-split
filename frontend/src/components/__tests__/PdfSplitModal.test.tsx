@@ -414,6 +414,35 @@ describe('PdfSplitModal - 自動検出再実行時のsegmentEdits誤適用 (GOAL
     expect(screen.getByText('検出顧客B')).toBeDefined()
     expect(screen.queryByText('手動編集-customer')).toBeNull()
   })
+
+  it('分割後のセグメント一覧は、保存値「不明顧客」を「不明利用者」と表示する', async () => {
+    const doc = makeDocument({
+      totalPages: 4,
+      // セグメントの利用者名・書類種別は pageResults(ページごとのOCR結果)から作られる
+      pageResults: [
+        { pageNumber: 1, detectedDocumentType: '領収書', detectedCustomerName: '不明顧客', detectedOfficeName: 'テスト事業所', detectedDate: null, matchScore: 0, matchType: 'none', text: '', truncated: false },
+        { pageNumber: 3, detectedDocumentType: '請求書', detectedCustomerName: '松本 実', detectedOfficeName: 'テスト事業所', detectedDate: null, matchScore: 100, matchType: 'exact', text: '', truncated: false },
+      ],
+      splitSuggestions: [
+        { afterPageNumber: 2, reason: 'manual', confidence: 100, newDocumentType: null, newCustomerName: null },
+      ],
+    })
+    render(
+      <PdfSplitModal
+        document={doc}
+        isOpen={true}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+        detailLoading={false}
+        detailError={false}
+      />
+    )
+
+    // 分割ポイント選択ステップの「分割後のセグメント」リストに出る
+    expect(screen.getByText('不明利用者 / 領収書')).toBeDefined()
+    expect(screen.getByText('松本 実 / 請求書')).toBeDefined()
+    expect(screen.queryByText(/不明顧客/)).toBeNull()
+  })
 })
 
 function makeFunctionsError(code: string, message: string): Error {

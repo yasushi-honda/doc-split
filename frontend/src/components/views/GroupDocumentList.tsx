@@ -36,7 +36,7 @@ import { useGroupDocumentListRefresh } from '@/hooks/useGroupDocumentListRefresh
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
 import { CustomerSubGroup } from './CustomerSubGroup';
 import { MultiCustomerBadge } from '@/components/MultiCustomerBadge';
-import { getStatusConfig, formatTimestamp } from '@/lib/documentUtils';
+import { getStatusConfig, formatTimestamp, formatCustomerNameForDisplay } from '@/lib/documentUtils';
 import { getDisplayFileName } from '@/utils/getDisplayFileName';
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity';
 import type { Document } from '@shared/types';
@@ -115,11 +115,11 @@ function DocumentRow({ document, groupType, onClick, onRetry, identityLookup }: 
       case 'customer':
         return document.documentType || '未判定';
       case 'office':
-        return document.customerName || '未判定';
+        return formatCustomerNameForDisplay(document.customerName) || '未判定';
       case 'documentType':
-        return document.customerName || '未判定';
+        return formatCustomerNameForDisplay(document.customerName) || '未判定';
       case 'careManager':
-        return document.customerName || '未判定';
+        return formatCustomerNameForDisplay(document.customerName) || '未判定';
       default:
         return document.documentType || '未判定';
     }

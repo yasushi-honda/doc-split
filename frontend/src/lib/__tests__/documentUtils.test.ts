@@ -247,6 +247,8 @@ describe('formatCustomerNameForDisplay', () => {
     ['実在の利用者名', '山田太郎'],
     ['「顧客」を含む名前(部分一致では置換しない)', '顧客太郎'],
     ['不明顧客を含む別文字列', '不明顧客A'],
+    ['前後に空白がある保存値(trimしない完全一致の契約)', ' 不明顧客 '],
+    ['変換済みの「不明利用者」(冪等)', '不明利用者'],
     ['空文字', ''],
   ])('%s はそのまま返す', (_label, input) => {
     expect(formatCustomerNameForDisplay(input)).toBe(input);
