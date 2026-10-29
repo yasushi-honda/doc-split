@@ -12,10 +12,10 @@ import type { DocumentStatus, SplitSegment } from '@shared/types';
 // (Driveエクスポートの顧客未確定ゲート、2026-07-25再設計)も同じsentinel判定を必要とするため
 // shared/customerIdentity.ts へ移設した。ここでは同一ファイル内(buildSegmentConfirmedFlags等)
 // からも使うためimportし、既存importerが無修正で動くようre-exportも兼ねる。
-import { isValidCustomerSelection } from '@shared/customerIdentity';
+import { isValidCustomerSelection, formatCustomerNameForDisplay } from '@shared/customerIdentity';
 import { isValidOfficeSelection } from '@shared/officeIdentity';
 
-export { isValidCustomerSelection, isValidOfficeSelection };
+export { isValidCustomerSelection, isValidOfficeSelection, formatCustomerNameForDisplay };
 
 // ============================================
 // ステータス表示設定

@@ -6,7 +6,7 @@
 export const CSV_TEMPLATES = {
   customers: {
     headers: ['name', 'furigana', 'careManagerName', 'notes', 'aliases'],
-    headerLabels: ['顧客名', 'フリガナ', '担当ケアマネ名', '備考', '別表記（|区切り）'],
+    headerLabels: ['利用者名', 'フリガナ', '担当ケアマネ名', '備考', '別表記（|区切り）'],
     example: ['山田太郎', 'ヤマダタロウ', '佐藤花子', '北区在住', 'やまだ太郎|山田 太郎'],
     filename: 'customers_template.csv',
   },

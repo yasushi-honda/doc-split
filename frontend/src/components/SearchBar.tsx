@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { useDebouncedSearch, type SearchResultDocument } from '@/hooks/useSearch';
+import { formatCustomerNameForDisplay } from '@/lib/documentUtils';
 import { CONSTANTS } from '@shared/types';
 
 interface SearchBarProps {
@@ -84,7 +85,7 @@ export function SearchBar({ onResultClick }: SearchBarProps) {
         <Input
           ref={inputRef}
           type="text"
-          placeholder="顧客名、事業所名、書類種別で検索..."
+          placeholder="利用者名、事業所名、書類種別で検索..."
           value={query}
           onChange={(e) => handleInputChange(e.target.value)}
           onFocus={() => query.length >= 2 && setIsOpen(true)}
@@ -204,7 +205,7 @@ function SearchResultItem({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-sm font-medium">
-              {document.customerName || '不明顧客'}
+              {formatCustomerNameForDisplay(document.customerName) || '不明利用者'}
             </span>
             <Badge variant="outline" className="text-xs shrink-0">
               {document.documentType || CONSTANTS.FILE_NAME_UNKNOWN_DOCUMENT}

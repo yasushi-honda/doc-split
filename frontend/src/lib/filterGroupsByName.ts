@@ -8,6 +8,7 @@
 import type { DocumentGroup } from '@/hooks/useDocumentGroups';
 import type { CategoryHierarchy } from '@/lib/buildDocumentTypeCategoryGroups';
 import { normalizeName } from '@/lib/textNormalizer';
+import { formatCustomerNameForDisplay } from '@/lib/documentUtils';
 
 /**
  * 全角/半角・大文字小文字・旧字体(外字)の差異を吸収して比較するための正規化。
@@ -21,7 +22,11 @@ export function normalizeForNameFilter(value: string): string {
 export function filterGroupsByName(groups: readonly DocumentGroup[], filterText: string): DocumentGroup[] {
   const normalized = normalizeForNameFilter(filterText.trim());
   if (!normalized) return [...groups];
-  return groups.filter((g) => normalizeForNameFilter(g.displayName).includes(normalized));
+  // 画面に出ている名前(保存値'不明顧客'は「不明利用者」)で照合する。保存値のまま比較すると、
+  // 見えている文字を入力しても一致しない
+  return groups.filter((g) =>
+    normalizeForNameFilter(formatCustomerNameForDisplay(g.displayName)).includes(normalized)
+  );
 }
 
 /**

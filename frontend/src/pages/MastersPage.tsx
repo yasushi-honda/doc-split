@@ -89,7 +89,7 @@ export function MastersPage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">マスターデータ管理</h1>
         <p className="mt-1 text-sm text-gray-500">
-          顧客・書類種別・事業所・ケアマネジャーのマスターデータを管理します
+          利用者・書類種別・事業所・ケアマネジャーのマスターデータを管理します
         </p>
       </div>
 
@@ -97,7 +97,7 @@ export function MastersPage() {
         <TabsList>
           <TabsTrigger value="customers" className="gap-2">
             <Users className="h-4 w-4" />
-            顧客
+            利用者
           </TabsTrigger>
           <TabsTrigger value="documents" className="gap-2">
             <FileText className="h-4 w-4" />
@@ -301,9 +301,9 @@ function CustomersMaster() {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
-          <CardTitle>顧客マスター</CardTitle>
+          <CardTitle>利用者マスター</CardTitle>
           <CardDescription>
-            {customers?.length ?? 0}件の顧客
+            {customers?.length ?? 0}件の利用者
             {customers && customers.some((c) => c.isContractEnded) && (
               <>(うち契約終了 {customers.filter((c) => c.isContractEnded).length}件)</>
             )}
@@ -329,9 +329,9 @@ function CustomersMaster() {
             disabled={isLoading || isError}
             title={
               isLoading
-                ? '顧客データの読み込み中はID照合が正しく行えないため、読み込み完了までお待ちください'
+                ? '利用者データの読み込み中はID照合が正しく行えないため、読み込み完了までお待ちください'
                 : isError
-                  ? '顧客データの読み込みに失敗したためID照合が行えません。画面を再読み込みしてください'
+                  ? '利用者データの読み込みに失敗したためID照合が行えません。画面を再読み込みしてください'
                   : undefined
             }
           >
@@ -361,7 +361,7 @@ function CustomersMaster() {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
             <Input
-              placeholder="顧客名・フリガナで検索..."
+              placeholder="利用者名・フリガナで検索..."
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               className="pl-10"
@@ -375,7 +375,7 @@ function CustomersMaster() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>顧客名</TableHead>
+                <TableHead>利用者名</TableHead>
                 <TableHead>フリガナ</TableHead>
                 <TableHead>担当ケアマネ</TableHead>
                 <TableHead>別表記</TableHead>
@@ -387,7 +387,7 @@ function CustomersMaster() {
               {filteredCustomers?.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center text-gray-500">
-                    顧客がありません
+                    利用者がありません
                   </TableCell>
                 </TableRow>
               ) : (
@@ -444,7 +444,7 @@ function CustomersMaster() {
         <Dialog open={isAddOpen} onOpenChange={(open) => { setIsAddOpen(open); if (!open) resetForm() }}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>顧客追加</DialogTitle>
+              <DialogTitle>利用者追加</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-4">
               {formError && (
@@ -453,7 +453,7 @@ function CustomersMaster() {
                 </div>
               )}
               <div className="space-y-2">
-                <Label>顧客名</Label>
+                <Label>利用者名</Label>
                 <Input
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
@@ -484,7 +484,7 @@ function CustomersMaster() {
                   placeholder="北名古屋在住"
                 />
                 <p className="text-xs text-gray-500">
-                  同姓同名の顧客を区別するための補足情報
+                  同姓同名の利用者を区別するための補足情報
                 </p>
               </div>
               <div className="space-y-2">
@@ -514,11 +514,11 @@ function CustomersMaster() {
         <Dialog open={!!editingCustomer} onOpenChange={() => setEditingCustomer(null)}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>顧客編集</DialogTitle>
+              <DialogTitle>利用者編集</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label>顧客名</Label>
+                <Label>利用者名</Label>
                 <Input
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
@@ -547,7 +547,7 @@ function CustomersMaster() {
                   placeholder="北名古屋在住"
                 />
                 <p className="text-xs text-gray-500">
-                  同姓同名の顧客を区別するための補足情報。選択肢に「名前（メモ）」形式で表示されます
+                  同姓同名の利用者を区別するための補足情報。選択肢に「名前（メモ）」形式で表示されます
                 </p>
               </div>
               <div className="space-y-2">
@@ -620,10 +620,10 @@ function CustomersMaster() {
         <Dialog open={duplicateConfirmOpen} onOpenChange={setDuplicateConfirmOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>同名の顧客が存在します</DialogTitle>
+              <DialogTitle>同名の利用者が存在します</DialogTitle>
               <DialogDescription>
-                「{formName}」という名前の顧客は既に登録されています。
-                同名の顧客を追加すると、OCR照合時に候補として表示されます。
+                「{formName}」という名前の利用者は既に登録されています。
+                同名の利用者を追加すると、OCR照合時に候補として表示されます。
                 それでも追加しますか？
               </DialogDescription>
             </DialogHeader>

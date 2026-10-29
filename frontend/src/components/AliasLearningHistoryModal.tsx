@@ -25,7 +25,7 @@ interface AliasLearningHistoryModalProps {
 
 // マスタータイプの表示設定
 const MASTER_TYPE_CONFIG: Record<AliasLearningMasterType, { label: string; icon: React.ElementType; color: string }> = {
-  customer: { label: '顧客', icon: User, color: 'bg-blue-100 text-blue-800' },
+  customer: { label: '利用者', icon: User, color: 'bg-blue-100 text-blue-800' },
   office: { label: '事業所', icon: Building, color: 'bg-green-100 text-green-800' },
   document: { label: '書類種別', icon: FileText, color: 'bg-purple-100 text-purple-800' },
 };
@@ -87,7 +87,7 @@ export function AliasLearningHistoryModal({ open, onOpenChange }: AliasLearningH
         <Tabs value={filterType} onValueChange={(v) => setFilterType(v as AliasLearningMasterType | 'all')} className="flex-1 flex flex-col">
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="all">すべて</TabsTrigger>
-            <TabsTrigger value="customer">顧客</TabsTrigger>
+            <TabsTrigger value="customer">利用者</TabsTrigger>
             <TabsTrigger value="office">事業所</TabsTrigger>
             <TabsTrigger value="document">書類種別</TabsTrigger>
           </TabsList>

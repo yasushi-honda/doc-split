@@ -10,7 +10,7 @@ import { Download, ExternalLink, Loader2, FileText, User, UserCheck, Building, C
 import { toast } from 'sonner'
 import { storage } from '@/lib/firebase'
 import { callFunction, getCallableErrorMessage } from '@/lib/callFunction'
-import { formatTimestamp } from '@/lib/documentUtils'
+import { formatTimestamp, formatCustomerNameForDisplay } from '@/lib/documentUtils'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   Dialog,
@@ -1295,7 +1295,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   <div className="mb-4 flex gap-2 rounded border border-blue-200 bg-blue-50 p-2 text-xs text-blue-700">
                     <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
                     <span>
-                      ここでの編集は、この書類個別の記録のみ更新します。顧客・事業所・書類種別・担当ケアマネのマスタは変更されません。
+                      ここでの編集は、この書類個別の記録のみ更新します。利用者・事業所・書類種別・担当ケアマネのマスタは変更されません。
                     </span>
                   </div>
                 )}
@@ -1305,7 +1305,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   <div className="flex items-start gap-3 py-2">
                     <User className="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs text-gray-500">顧客名</p>
+                      <p className="text-xs text-gray-500">利用者名</p>
                       {isEditing ? (
                         <div className="mt-1">
                           {/* 編集時の警告（複数候補がある場合） */}
@@ -1377,14 +1377,14 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         </div>
                       ) : (
                         <div className="flex items-center gap-2">
-                          <span className="truncate text-sm text-gray-900">{document.customerName || '未判定'}</span>
+                          <span className="truncate text-sm text-gray-900">{formatCustomerNameForDisplay(document.customerName) || '未判定'}</span>
                           <ExtractionInfoPopover fieldType="customer" document={document} />
                           {(needsCustomerConfirmation || isSameNameCollision) && (
                             <Badge
                               variant="outline"
                               className="bg-orange-100 text-orange-800 border-orange-300 text-xs"
                               title={isSameNameCollision
-                                ? '同姓同名の顧客マスターが複数あります。正しい顧客を選び直してください'
+                                ? '同姓同名の利用者マスターが複数あります。正しい利用者を選び直してください'
                                 : undefined}
                             >
                               {isSameNameCollision ? '同姓同名' : '選択待ち'}
@@ -1561,9 +1561,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     isSameNameCollision(useCustomerIdentityLookup経由の常に最新の判定)に統一する) */}
                 {isSameNameCollision && (
                   <div className="mt-4 rounded-lg bg-yellow-50 p-3">
-                    <p className="text-xs font-medium text-yellow-800">同姓同名の顧客が存在します</p>
+                    <p className="text-xs font-medium text-yellow-800">同姓同名の利用者が存在します</p>
                     <p className="mt-1 text-xs text-yellow-700">
-                      正しい顧客を選び直して保存してください（この書類はGoogle Driveへエクスポートされません）
+                      正しい利用者を選び直して保存してください（この書類はGoogle Driveへエクスポートされません）
                     </p>
                     <ul className="mt-1 space-y-0.5 text-xs text-yellow-700">
                       {collidingMasters.map((c) => (
@@ -1584,7 +1584,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       複数名の可能性{typeof document.multiCustomerCount === 'number' ? `（${document.multiCustomerCount}名）` : ''}
                     </p>
                     <p className="mt-1 text-xs text-indigo-700">
-                      OCRで複数の顧客名が完全一致で検出されました。1つの書類に複数人が記載されていないか確認してください。
+                      OCRで複数の利用者名が完全一致で検出されました。1つの書類に複数人が記載されていないか確認してください。
                     </p>
                   </div>
                 )}
@@ -1966,11 +1966,11 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
               <p>この書類のOCR処理を再実行します。以下の情報は削除され、AIが再抽出します。</p>
               <ul className="list-disc pl-5 space-y-0.5">
                 <li>OCR結果・AI要約</li>
-                <li>顧客名・事業所・書類種別・書類日付・担当ケアマネ</li>
+                <li>利用者名・事業所・書類種別・書類日付・担当ケアマネ</li>
                 <li>確認済み状態（再抽出後にあらためて確認が必要になります）</li>
               </ul>
               <p className="text-xs text-gray-500">
-                再処理中は顧客別・担当CM別などのグループ分けから一時的に外れます。
+                再処理中は利用者別・担当CM別などのグループ分けから一時的に外れます。
               </p>
             </div>
           </AlertDialogDescription>

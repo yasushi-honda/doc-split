@@ -30,8 +30,8 @@ test.describe('タブレット横向き サイドバー @emulator', () => {
     const docInfo = modal.locator('h3:has-text("書類情報")').nth(1);
     await expect(docInfo).toBeVisible({ timeout: 3000 });
 
-    // 顧客名ラベルが表示されること
-    const customerLabel = modal.locator('text=顧客名').first();
+    // 利用者名ラベルが表示されること
+    const customerLabel = modal.locator('text=利用者名').first();
     await expect(customerLabel).toBeVisible();
   });
 

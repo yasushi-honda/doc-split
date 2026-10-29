@@ -25,6 +25,7 @@ import {
 import { cn } from '@/lib/utils';
 import { getDisplayName } from '@/utils/displayName';
 import { masterCandidateFilter } from '@/lib/masterCandidateFilter';
+import { formatCustomerNameForDisplay } from '@/lib/documentUtils';
 import { RegisterNewMasterModal, type MasterType, type RegisteredMasterInfo } from './RegisterNewMasterModal';
 
 // ============================================
@@ -56,7 +57,7 @@ interface MasterSelectFieldProps {
 // ============================================
 
 const typeConfig: Record<MasterFieldType, { icon: typeof User; label: string; addLabel: string; suggestedLabel: string }> = {
-  customer: { icon: User, label: '顧客', addLabel: '新規顧客を追加', suggestedLabel: 'OCR候補' },
+  customer: { icon: User, label: '利用者', addLabel: '新規利用者を追加', suggestedLabel: 'OCR候補' },
   office: { icon: Building2, label: '事業所', addLabel: '新規事業所を追加', suggestedLabel: 'OCR候補' },
   documentType: { icon: FileText, label: '書類種別', addLabel: '新規書類種別を追加', suggestedLabel: 'OCR候補' },
   careManager: { icon: UserCheck, label: '担当ケアマネ', addLabel: '', suggestedLabel: 'OCR候補' },
@@ -145,7 +146,7 @@ export function MasterSelectField({
             disabled={disabled}
           >
             <span className={cn("truncate", !value && "text-muted-foreground")}>
-              {value || placeholder}
+              {(type === 'customer' ? formatCustomerNameForDisplay(value) : value) || placeholder}
             </span>
             <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
           </Button>

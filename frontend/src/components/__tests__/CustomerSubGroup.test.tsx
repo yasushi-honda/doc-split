@@ -114,7 +114,7 @@ describe('CustomerSubGroup - 同姓同名バッジ', () => {
     )
     expandToDocumentRow('松本 実', 'ケアプラン')
     expect(screen.getByText('選択待ち').getAttribute('title')).toBe(
-      '顧客が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します'
+      '利用者が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します'
     )
   })
 
@@ -197,5 +197,28 @@ describe('CustomerSubGroup - 契約終了ボタン(担当CM別、2026-10-27)', (
     )
     fireEvent.click(screen.getByRole('button', { name: '契約終了にする' }))
     expect(screen.queryByText(/ケアプラン/)).toBeNull()
+  })
+})
+
+describe('CustomerSubGroup - 保存値「不明顧客」の見出し表示', () => {
+  it('グループ見出しは「不明顧客」でなく「不明利用者」を表示する', () => {
+    render(
+      <CustomerSubGroup
+        documents={[makeDocument({ customerName: '不明顧客' })]}
+        identityLookup={makeLookup([])}
+      />
+    )
+    expect(screen.getByRole('button', { name: /不明利用者/ })).toBeDefined()
+    expect(screen.queryByText(/不明顧客/)).toBeNull()
+  })
+
+  it('実在の利用者名の見出しはそのまま表示する', () => {
+    render(
+      <CustomerSubGroup
+        documents={[makeDocument({ customerName: '松本 実' })]}
+        identityLookup={makeLookup([])}
+      />
+    )
+    expect(screen.getByRole('button', { name: /松本 実/ })).toBeDefined()
   })
 })

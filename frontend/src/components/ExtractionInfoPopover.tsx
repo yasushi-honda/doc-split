@@ -55,7 +55,7 @@ function getFieldInfo(fieldType: FieldType, document: Document): {
         isCurrent: c.customerName === document.customerName,
       }))
       return {
-        fieldLabel: '顧客名',
+        fieldLabel: '利用者名',
         currentValue: document.customerName || '未判定',
         ocrField: extraction?.customer,
         matchType: details?.customerMatchType ?? extraction?.customer?.matchType,

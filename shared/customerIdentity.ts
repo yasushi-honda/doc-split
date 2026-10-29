@@ -30,10 +30,23 @@
  * 形にリファクタ済み、外部契約(戻り値boolean)は不変。
  */
 
+import { CONSTANTS } from './types';
+
 /**
  * 顧客名の sentinel 値。OCR 未マッチ・未判定状態を示すため、選択として無効扱いにする。
  */
 export const CUSTOMER_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明顧客']);
+
+/**
+ * 利用者名を画面・利用者向けメッセージに出す直前の整形。
+ * OCRで特定できなかった書類の保存値'不明顧客'は、Firestore・ファイル名・照合ロジックが
+ * この文字列に依存するため書き換えず、表示だけ「不明利用者」に置き換える。
+ * 完全一致のときだけ置換し、実在の名前に「顧客」が含まれていても変えない。
+ */
+export function formatCustomerNameForDisplay(name: string | null | undefined): string {
+  if (name == null) return '';
+  return name === CONSTANTS.FILE_NAME_UNKNOWN_CUSTOMER ? '不明利用者' : name;
+}
 
 /**
  * 顧客が未確定と判定された理由(現場管理者への通知UI・監査スクリプトの内訳集計で使う、

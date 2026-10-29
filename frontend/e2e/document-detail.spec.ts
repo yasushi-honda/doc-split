@@ -44,7 +44,7 @@ test.describe('書類詳細モーダル @emulator', () => {
     const modal = page.locator('[role="dialog"]');
     await expect(modal).toBeVisible({ timeout: 5000 });
 
-    // 顧客名が表示される
+    // 利用者名が表示される
     await expect(modal.locator('text=阿部太郎')).toBeVisible();
   });
 

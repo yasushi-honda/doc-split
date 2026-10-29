@@ -17,6 +17,7 @@ import {
   findSameNameCollisionNames,
   precheckCustomerIdentity,
   resolveCustomerUnconfirmedReason,
+  formatCustomerNameForDisplay,
 } from '../../shared/customerIdentity';
 
 describe('isValidCustomerSelection', () => {
@@ -294,5 +295,24 @@ describe('resolveCustomerUnconfirmedReason', () => {
       { customerMasterName: '田中次郎', sameNameCollisionNames: new Set(['田中太郎']) }
     );
     expect(reason).to.equal('name-id-mismatch');
+  });
+});
+
+describe('formatCustomerNameForDisplay', () => {
+  // 保存値'不明顧客'はFirestore・ファイル名・照合が依存するため変えず、画面・利用者向けメッセージに
+  // 出す直前だけ「不明利用者」にする(frontend/functionsで共有)
+  it("保存値'不明顧客'は'不明利用者'になる", () => {
+    expect(formatCustomerNameForDisplay('不明顧客')).to.equal('不明利用者');
+  });
+
+  it('完全一致以外はそのまま返す(部分一致・空白付き・別sentinel・実名)', () => {
+    for (const input of ['未判定', '山田太郎', '顧客太郎', '不明顧客A', ' 不明顧客 ', '不明利用者', '']) {
+      expect(formatCustomerNameForDisplay(input)).to.equal(input);
+    }
+  });
+
+  it('null/undefinedは空文字を返す', () => {
+    expect(formatCustomerNameForDisplay(null)).to.equal('');
+    expect(formatCustomerNameForDisplay(undefined)).to.equal('');
   });
 });

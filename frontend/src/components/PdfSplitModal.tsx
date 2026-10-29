@@ -39,7 +39,7 @@ import {
 import { useDocumentMasters, useCustomerMasters, useOfficeMasters } from '@/hooks/useDocuments'
 import { PdfSplitPreview } from './PdfSplitPreview'
 import { getDisplayFileName } from '@/utils/getDisplayFileName'
-import { applySegmentFieldEdit, buildSegmentConfirmedFlags, type SegmentTextField } from '@/lib/documentUtils'
+import { applySegmentFieldEdit, buildSegmentConfirmedFlags, formatCustomerNameForDisplay, type SegmentTextField } from '@/lib/documentUtils'
 import { getCallableErrorCode, getCallableErrorMessage } from '@/lib/callFunction'
 import type { Document, SplitSuggestion, SplitSegment } from '@shared/types'
 
@@ -428,7 +428,7 @@ export function PdfSplitModal({
   }
 
   const reasonLabels: Record<string, string> = {
-    new_customer: '顧客変更',
+    new_customer: '利用者変更',
     new_document_type: '書類種別変更',
     content_break: '内容区切り',
     manual: '手動追加',
@@ -630,7 +630,7 @@ export function PdfSplitModal({
                         {reason && (
                           <div className="mt-2 text-xs text-gray-500">
                             {reason.newCustomerName && (
-                              <p>顧客: {reason.newCustomerName}</p>
+                              <p>利用者: {reason.newCustomerName}</p>
                             )}
                             {reason.newDocumentType && (
                               <p>書類: {reason.newDocumentType}</p>
@@ -660,7 +660,7 @@ export function PdfSplitModal({
                       {segment.endPage}
                     </span>
                     <span className="text-gray-500">
-                      {segment.customerName} / {segment.documentType}
+                      {formatCustomerNameForDisplay(segment.customerName)} / {segment.documentType}
                     </span>
                   </div>
                 ))}
@@ -685,7 +685,7 @@ export function PdfSplitModal({
                   <CardContent className="space-y-3">
                     <div className="grid grid-cols-3 gap-3">
                       <div>
-                        <Label className="text-xs">顧客名</Label>
+                        <Label className="text-xs">利用者名</Label>
                         <MasterSelectField
                           type="customer"
                           value={segment.customerName}

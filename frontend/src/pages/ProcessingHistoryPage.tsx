@@ -42,6 +42,7 @@ import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity';
 import { DocumentDetailModal } from '@/components/DocumentDetailModal';
 import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
 import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
+import { formatCustomerNameForDisplay } from '@/lib/documentUtils';
 import type { Document as DocType, DocumentStatus } from '@shared/types';
 import { Loader2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Users } from 'lucide-react';
 
@@ -84,7 +85,7 @@ function UnconfirmedBadge({ doc, identityLookup }: { doc: DocType; identityLooku
       <Badge
         variant="outline"
         className="bg-orange-100 text-orange-800 border-orange-300"
-        title="同姓同名の顧客マスターが複数あります。書類詳細で正しい顧客を選び直してください"
+        title="同姓同名の利用者マスターが複数あります。書類詳細で正しい利用者を選び直してください"
       >
         <Users className="mr-1 h-3 w-3 inline" />
         同姓同名
@@ -211,7 +212,7 @@ export function ProcessingHistoryPage() {
 
               {/* 顧客確定状態フィルター */}
               <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">顧客確定:</span>
+                <span className="text-sm text-muted-foreground">利用者確定:</span>
                 <Select value={filters.confirmed} onValueChange={handleConfirmedChange}>
                   <SelectTrigger className="w-32">
                     <SelectValue />
@@ -272,7 +273,7 @@ export function ProcessingHistoryPage() {
                           </div>
                         </TableHead>
                         <TableHead>ファイル名</TableHead>
-                        <TableHead className="w-[150px]">顧客名</TableHead>
+                        <TableHead className="w-[150px]">利用者名</TableHead>
                         <TableHead className="w-[120px]">書類種別</TableHead>
                         <TableHead className="w-[100px]">ステータス</TableHead>
                         <TableHead className="w-[250px]">OCR抜粋</TableHead>
@@ -293,7 +294,7 @@ export function ProcessingHistoryPage() {
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <span className="truncate max-w-[100px]">{doc.customerName}</span>
+                              <span className="truncate max-w-[100px]">{formatCustomerNameForDisplay(doc.customerName)}</span>
                               <UnconfirmedBadge doc={doc} identityLookup={identityLookup} />
                             </div>
                           </TableCell>

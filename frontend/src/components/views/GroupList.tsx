@@ -54,7 +54,7 @@ import {
   type CategoryHierarchy,
 } from '@/lib/buildDocumentTypeCategoryGroups';
 import { filterGroupsByName, filterCategoryHierarchyByName } from '@/lib/filterGroupsByName';
-import { formatTimestamp } from '@/lib/documentUtils';
+import { formatTimestamp, formatCustomerNameForDisplay } from '@/lib/documentUtils';
 import { GroupDocumentList } from './GroupDocumentList';
 import type { DateRange } from '@/components/DateRangeFilter';
 
@@ -78,9 +78,9 @@ const GROUP_TYPE_CONFIG: Record<
   { label: string; icon: React.ComponentType<{ className?: string }>; emptyMessage: string }
 > = {
   customer: {
-    label: '顧客別',
+    label: '利用者別',
     icon: Users,
-    emptyMessage: '顧客データがありません',
+    emptyMessage: '利用者データがありません',
   },
   office: {
     label: '事業所別',
@@ -136,7 +136,7 @@ function GroupItem({ group, isExpanded, furiganaMap, dateFilter, showContractEnd
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-medium text-gray-900 truncate">
-              {group.displayName || '未判定'}
+              {formatCustomerNameForDisplay(group.displayName) || '未判定'}
             </span>
             <Badge variant="secondary" className="text-xs">
               {group.count}件
@@ -518,7 +518,7 @@ export function GroupList({ groupType, dateFilter, showContractEnded = false, on
         {/* あかさたなフィルターで結果0件の場合（名前絞り込みが0件表示を出している間は重複表示しない） */}
         {isCustomerView && selectedKanaRow && displayGroups.length === 0 && !isNameFilterActive && (
           <div className="py-8 text-center text-sm text-gray-500">
-            「{selectedKanaRow}」行の顧客はいません
+            「{selectedKanaRow}」行の利用者はいません
           </div>
         )}
       </Card>

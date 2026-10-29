@@ -1,7 +1,7 @@
 /**
  * あかさたなフィルター E2Eテスト
  *
- * 顧客別グループビューのフィルター挙動を検証
+ * 利用者別グループビューのフィルター挙動を検証
  *
  * 実行方法:
  *   1. Firebase Emulator起動: firebase emulators:start
@@ -16,9 +16,9 @@ import { loginWithTestUser, clickTab } from './helpers';
 // ヘルパー
 // ============================================
 
-/** 「顧客別」タブに移動 */
+/** 「利用者別」タブに移動 */
 async function navigateToCustomerTab(page: Page) {
-  await clickTab(page, '顧客別');
+  await clickTab(page, '利用者別');
   // グループデータが表示されるまで待機（CIでは時間がかかる場合がある）
   await page.waitForTimeout(2000);
 }
@@ -62,7 +62,7 @@ test.describe('あかさたなフィルター @emulator', () => {
     await loginWithTestUser(page);
   });
 
-  test('顧客別タブにフィルターバーが表示される', async ({ page }) => {
+  test('利用者別タブにフィルターバーが表示される', async ({ page }) => {
     await navigateToCustomerTab(page);
 
     // フィルターバーが表示される
@@ -90,7 +90,7 @@ test.describe('あかさたなフィルター @emulator', () => {
     await expect(kanaButton).not.toBeVisible();
   });
 
-  test('「か」行でフィルターすると該当顧客のみ表示される', async ({ page }) => {
+  test('「か」行でフィルターすると該当利用者のみ表示される', async ({ page }) => {
     await navigateToCustomerTab(page);
 
     // フィルターバーが使用可能になるまで待機
@@ -102,12 +102,12 @@ test.describe('あかさたなフィルター @emulator', () => {
     // 加藤次郎が表示される
     await expect(page.locator('text=加藤次郎')).toBeVisible({ timeout: 5000 });
 
-    // 他の行の顧客が表示されない
+    // 他の行の利用者が表示されない
     await expect(page.locator('text=阿部太郎')).not.toBeVisible();
     await expect(page.locator('text=佐藤三郎')).not.toBeVisible();
   });
 
-  test('「さ」行でフィルターすると該当顧客のみ表示される', async ({ page }) => {
+  test('「さ」行でフィルターすると該当利用者のみ表示される', async ({ page }) => {
     await navigateToCustomerTab(page);
 
     await expect(getKanaButton(page, 'さ')).toBeEnabled({ timeout: 10000 });
@@ -129,7 +129,7 @@ test.describe('あかさたなフィルター @emulator', () => {
     // 「全」でリセット
     await getFilterBar(page).click();
 
-    // 全顧客が表示される
+    // 全利用者が表示される
     await expect(page.locator('text=阿部太郎')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('text=田中四郎')).toBeVisible();
   });
@@ -148,14 +148,14 @@ test.describe('あかさたなフィルター @emulator', () => {
     await expect(page.locator('text=阿部太郎')).toBeVisible({ timeout: 5000 });
   });
 
-  test('該当なしの行では「〜行の顧客はいません」と表示される', async ({ page }) => {
+  test('該当なしの行では「〜行の利用者はいません」と表示される', async ({ page }) => {
     await navigateToCustomerTab(page);
 
-    // シードデータに「ら」行の顧客はいない
+    // シードデータに「ら」行の利用者はいない
     await expect(getKanaButton(page, 'ら')).toBeEnabled({ timeout: 10000 });
     await getKanaButton(page, 'ら').click();
 
-    await expect(page.locator('text=行の顧客はいません')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('text=行の利用者はいません')).toBeVisible({ timeout: 5000 });
   });
 
   test('フィルター適用時に件数が表示される', async ({ page }) => {
@@ -170,7 +170,7 @@ test.describe('あかさたなフィルター @emulator', () => {
   });
 
   test('フィルターバーはcustomersロード完了まで無効化される', async ({ page }) => {
-    // ページに直接アクセスして顧客別タブへ
+    // ページに直接アクセスして利用者別タブへ
     await navigateToCustomerTab(page);
 
     // フィルターバーが表示される時点で、disabled=falseであることを確認
@@ -201,8 +201,8 @@ test.describe('タブ切り替え時のフィルター挙動 @emulator', () => {
     await page.locator('[role="tab"]').filter({ hasText: '事業所別' }).click();
     await page.waitForTimeout(500);
 
-    // 顧客別タブに戻る
-    await page.locator('[role="tab"]').filter({ hasText: '顧客別' }).click();
+    // 利用者別タブに戻る
+    await page.locator('[role="tab"]').filter({ hasText: '利用者別' }).click();
     await page.waitForTimeout(1000);
 
     // フィルターバーが再表示される

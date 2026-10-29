@@ -348,7 +348,7 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
     expect(createCallsB).to.have.lengthOf(1);
   });
 
-  it('顧客未確定の書類はCustomerUnconfirmedErrorでerror遷移し、driveExportErrorが「顧客が未確定のため」で始まる(同姓同名リスク対応、2026-07-25再設計: 同名マスター2件で曖昧性ありのケース)', async () => {
+  it('顧客未確定の書類はCustomerUnconfirmedErrorでerror遷移し、driveExportErrorが「利用者が未確定のため」で始まる(同姓同名リスク対応、2026-07-25再設計: 同名マスター2件で曖昧性ありのケース)', async () => {
     const docId = await seedDocument({ customerConfirmed: false });
     await seedCollidingCustomers('鈴木花子', 2); // beforeEachのseedCustomer()に加え、同名衝突を作る
     const { drive } = makeFakeDrive({});
@@ -364,7 +364,7 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
     const after = await getDoc(docId);
     expect(after.driveExportStatus).to.equal('error');
     expect(after.driveExportError).to.be.a('string');
-    expect(after.driveExportError as string).to.match(/^顧客が未確定のため/);
+    expect(after.driveExportError as string).to.match(/^利用者が未確定のため/);
     // Issue #881: CustomerUnconfirmedErrorはpermanent(人間が顧客確定するまで解消しない)
     expect(after.driveExportErrorKind).to.equal('permanent');
   });

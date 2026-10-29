@@ -7,7 +7,7 @@
  * (scripts/lib/backfillDetailHelpers.ts と同じ分離パターン)。
  */
 
-import { DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX } from '../../shared/types';
+import { isCustomerUnconfirmedDriveExportError } from '../../shared/types';
 
 /** backfillが一時的にセットするdriveExportErrorのsentinel文字列。rollback判定にも使う。 */
 export const BACKFILL_ERROR_MESSAGE =
@@ -35,10 +35,7 @@ export function classifyDriveExportError(driveExportError: unknown): DriveExport
   if (driveExportError === BACKFILL_ERROR_MESSAGE) {
     return 'backfill-marker';
   }
-  if (
-    typeof driveExportError === 'string' &&
-    driveExportError.startsWith(DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX)
-  ) {
+  if (isCustomerUnconfirmedDriveExportError(driveExportError)) {
     return 'customer-unconfirmed';
   }
   return 'real';

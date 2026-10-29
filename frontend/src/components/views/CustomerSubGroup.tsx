@@ -21,7 +21,7 @@ import type { CustomerIdentityLookup } from '@/hooks/useMasters';
 import { findCustomerForGroupKey, type CustomerNameIndex } from '@/lib/contractEnded';
 import { normalizeGroupKey } from '@/lib/normalizeGroupKey';
 import { ContractEndedToggle } from './ContractEndedToggle';
-import { getStatusConfig, formatTimestamp } from '@/lib/documentUtils';
+import { getStatusConfig, formatTimestamp, formatCustomerNameForDisplay } from '@/lib/documentUtils';
 import { getDisplayFileName } from '@/utils/getDisplayFileName';
 import {
   buildCustomerFolderGroups,
@@ -144,11 +144,11 @@ function DocumentRow({ document, onClick, onRetry, identityLookup }: DocumentRow
   // (Codex plan review指摘、2026-07-26)。
   const reviewReasons: string[] = [];
   if (isSameNameCollision) {
-    reviewReasons.push('同姓同名の顧客マスターが複数あります。書類詳細で正しい顧客を選び直してください');
+    reviewReasons.push('同姓同名の利用者マスターが複数あります。書類詳細で正しい利用者を選び直してください');
   } else if (needsCustomerConfirmation) {
     // Issue #1034: 顧客だけが未確定(同姓同名以外の理由)の場合、以前は理由が一切表示されず
     // 「なぜ選択待ちが消えないか」が伝わらなかった。
-    reviewReasons.push('顧客が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します');
+    reviewReasons.push('利用者が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します');
   }
   if (needsOfficeConfirmation) {
     reviewReasons.push('事業所が未選択です');
@@ -348,7 +348,7 @@ function CustomerGroupItem({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-gray-800 truncate">
-              {group.customerName}
+              {formatCustomerNameForDisplay(group.customerName)}
             </span>
             <Badge variant="outline" className="text-xs">
               {group.documents.length}件
