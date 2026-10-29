@@ -110,3 +110,25 @@ describe('filterCategoryHierarchyByName', () => {
     expect(filterCategoryHierarchyByName(hierarchy, '存在しない書類種別')).toEqual([]);
   });
 });
+
+// 保存値'不明顧客'は画面では「不明利用者」と表示される(formatCustomerNameForDisplay)。
+// 絞り込みは「画面に見えている名前」で照合しないと、見えている文字を入れても0件になる
+describe('filterGroupsByName - 保存値「不明顧客」の画面表示名での絞り込み', () => {
+  const groups = [makeGroup('不明顧客'), makeGroup('山田太郎')]
+
+  it('画面に表示される「不明利用者」で絞り込める', () => {
+    expect(filterGroupsByName(groups, '不明利用者').map((g) => g.displayName)).toEqual(['不明顧客'])
+  })
+
+  it('「不明」だけの部分一致でも絞り込める', () => {
+    expect(filterGroupsByName(groups, '不明').map((g) => g.displayName)).toEqual(['不明顧客'])
+  })
+
+  it('画面に出ない旧表記「不明顧客」では一致しない(見えている名前で照合する)', () => {
+    expect(filterGroupsByName(groups, '不明顧客')).toEqual([])
+  })
+
+  it('実在の利用者名の絞り込みは従来どおり', () => {
+    expect(filterGroupsByName(groups, '山田').map((g) => g.displayName)).toEqual(['山田太郎'])
+  })
+})
