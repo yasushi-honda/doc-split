@@ -24,7 +24,6 @@ import { PDFDocument } from 'pdf-lib';
 
 const ALLOWED_PROJECT_ID = 'doc-split-dev';
 const MAX_SEGMENTS = 249; // splitPdfのbatch書込上限(2N+1<=500)に合わせる
-const FIXTURE_UID = 'split-timing-fixture-uid';
 const REQUEST_TIMEOUT_MS = 330_000; // サーバーのtimeoutSeconds=300 + 余裕
 
 const projectId = process.env.FIREBASE_PROJECT_ID || '';
@@ -110,15 +109,15 @@ async function buildPdf(pageCount: number): Promise<Buffer> {
   return Buffer.from(await doc.save());
 }
 
-async function getIdToken(): Promise<string> {
-  await db.doc(`users/${FIXTURE_UID}`).set({
+async function getIdToken(fixtureUid: string): Promise<string> {
+  await db.doc(`users/${fixtureUid}`).set({
     role: 'admin',
     displayName: 'split timing fixture',
     email: 'split-timing-fixture@doc-split-dev.invalid',
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     purpose: 'split-timing-measure',
   });
-  const customToken = await admin.auth().createCustomToken(FIXTURE_UID);
+  const customToken = await admin.auth().createCustomToken(fixtureUid);
   const res = await fetch(
     `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${apiKey}`,
     {
@@ -137,6 +136,9 @@ async function getIdToken(): Promise<string> {
 async function main(): Promise<void> {
   const runId = `${Date.now()}`;
   const docId = `split-timing-${runId}`;
+  // 並走実行のcleanupが互いのfixtureユーザーを消さないよう、実行ごとに別UIDにする
+  const fixtureUid = `split-timing-${runId}-uid`;
+  let splitStartedAt = 0;
   const sourcePath = `original/${docId}.pdf`;
 
   try {
@@ -191,9 +193,10 @@ async function main(): Promise<void> {
     segments.push(segment(segmentCount, pages));
     const splitPoints = segments.slice(1).map((s) => s.startPage - 1);
 
-    const idToken = await getIdToken();
+    const idToken = await getIdToken(fixtureUid);
     console.log(`splitPdf呼び出し: ${segments.length}分割`);
     const t1 = Date.now();
+    splitStartedAt = t1;
     const res = await fetch(
       `https://asia-northeast1-${projectId}.cloudfunctions.net/splitPdf`,
       {
@@ -218,11 +221,16 @@ async function main(): Promise<void> {
       );
     }
   } finally {
-    await cleanup(docId, sourcePath);
+    await cleanup(docId, sourcePath, fixtureUid, splitStartedAt);
   }
 }
 
-async function cleanup(docId: string, sourcePath: string): Promise<void> {
+async function cleanup(
+  docId: string,
+  sourcePath: string,
+  fixtureUid: string,
+  splitStartedAt: number
+): Promise<void> {
   // 応答を受け取れなかった場合(通信断・クライアントタイムアウト)でもサーバー側でsplitが
   // commit済みのことがあるため、子docは応答ではなくparentDocumentIdのクエリで拾う。
   // 子はstatus:'pending'でOCRパイプラインの対象になるので取り残さない
@@ -243,9 +251,31 @@ async function cleanup(docId: string, sourcePath: string): Promise<void> {
   for (const id of childIds) {
     await bucket.deleteFiles({ prefix: `processed/${id}/` });
   }
-  await db.doc(`users/${FIXTURE_UID}`).delete();
-  await admin.auth().deleteUser(FIXTURE_UID).catch(() => undefined);
+  await db.doc(`users/${fixtureUid}`).delete();
+  await admin.auth().deleteUser(fixtureUid).catch(() => undefined);
+  await reportOrphans(childIds, splitStartedAt);
   console.log('[cleanup] done');
+}
+
+/**
+ * splitPdfがタイムアウト等で途中終了すると、子docのbatch commit前にアップロード済みの
+ * processed/<子ID>/配下のPDFが孤児として残る(子docが無いので上のクエリでは拾えない)。
+ * 他の書込と区別できないため削除はせず、実行開始以降に作られたものを件数だけ報告する。
+ */
+async function reportOrphans(committedChildIds: string[], splitStartedAt: number): Promise<void> {
+  if (!splitStartedAt) return;
+  const [files] = await bucket.getFiles({ prefix: 'processed/' });
+  const known = new Set(committedChildIds);
+  const orphans = files.filter((f) => {
+    const created = Date.parse(String(f.metadata.timeCreated ?? ''));
+    return created >= splitStartedAt && !known.has(f.name.split('/')[1]);
+  });
+  if (orphans.length > 0) {
+    console.log(
+      `[cleanup] ⚠️ 実行開始以降に作成された孤児候補 ${orphans.length}件 (processed/配下、未削除): ` +
+        orphans.slice(0, 3).map((f) => f.name).join(', ') + ' ...'
+    );
+  }
 }
 
 main()
