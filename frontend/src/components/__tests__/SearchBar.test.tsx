@@ -60,7 +60,7 @@ function setupMockedSearch(overrides: Partial<MockedHookReturn>): void {
  */
 function renderAndOpen(): void {
   render(<SearchBar />)
-  const input = screen.getByPlaceholderText('顧客名、事業所名、書類種別で検索...')
+  const input = screen.getByPlaceholderText('利用者名、事業所名、書類種別で検索...')
   fireEvent.focus(input)
 }
 

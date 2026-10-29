@@ -2,7 +2,7 @@
  * 契約終了した利用者を書類画面から既定で非表示にする E2Eテスト (Issue #1033)
  *
  * 前提データ: scripts/seed-issue-1033-contract-ended.js
- * - 顧客マスター: 契約終了太郎(Issue1033)(isContractEnded:true) / 契約中花子(Issue1033)(isContractEnded:false)
+ * - 利用者マスター: 契約終了太郎(Issue1033)(isContractEnded:true) / 契約中花子(Issue1033)(isContractEnded:false)
  * - 書類: 契約終了太郎の確認済み書類1件・未確認書類1件、契約中花子の確認済み書類1件
  *   (2026-10-27: 契約終了の利用者は確認済み・未確認を問わず既定で非表示)
  *   (共通の担当CM「検証三郎(Issue1033)」配下)
@@ -48,8 +48,8 @@ test.describe('契約終了した利用者の非表示 (#1033) @emulator', () =>
     await expect(page.locator('text=E2E_Issue1033_契約終了太郎_未確認.pdf')).toBeVisible({ timeout: 10000 });
   });
 
-  test('顧客別タブ: 契約終了利用者のグループは既定で表示されない', async ({ page }) => {
-    await clickTab(page, '顧客別');
+  test('利用者別タブ: 契約終了利用者のグループは既定で表示されない', async ({ page }) => {
+    await clickTab(page, '利用者別');
 
     await expect(page.locator('text=契約中花子(Issue1033)')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('text=契約終了太郎(Issue1033)')).not.toBeVisible();

@@ -305,7 +305,22 @@ export interface Document {
  * このprefixで「顧客未確定によるブロック」と「実際のDrive APIエラー」を分類する
  * 安定文字列として、functions/scripts双方から参照できるsharedに定数化する。
  */
-export const DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX = '顧客が未確定のため';
+export const DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX = '利用者が未確定のため';
+
+/**
+ * 画面表記を「顧客」から「利用者」へ統一する前に保存された`driveExportError`のprefix。
+ * Firestoreには旧文言のまま残るため、分類では新旧どちらも受け付ける。
+ */
+export const DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_LEGACY_MESSAGE_PREFIX = '顧客が未確定のため';
+
+/** `driveExportError`が「利用者未確定によるブロック」か(新旧どちらのprefixも対象) */
+export function isCustomerUnconfirmedDriveExportError(message: unknown): boolean {
+  return (
+    typeof message === 'string' &&
+    (message.startsWith(DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX) ||
+      message.startsWith(DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_LEGACY_MESSAGE_PREFIX))
+  );
+}
 
 // ============================================
 // ADR-0018: Firestore egress削減のためのサブコレクション分離 (Issue #547)

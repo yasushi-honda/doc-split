@@ -14,6 +14,7 @@ import {
   isValidDocumentTypeSelection,
   applySegmentFieldEdit,
   buildSegmentConfirmedFlags,
+  formatCustomerNameForDisplay,
 } from '../documentUtils';
 
 describe('isValidCustomerSelection', () => {
@@ -232,5 +233,27 @@ describe('buildSegmentConfirmedFlags', () => {
       officeConfirmed: false,
       documentTypeConfirmed: false,
     });
+  });
+});
+
+describe('formatCustomerNameForDisplay', () => {
+  // 保存値'不明顧客'はFirestore・ファイル名・照合ロジックで使うため変えず、画面表示時だけ置換する
+  it("保存値'不明顧客'は画面表示で'不明利用者'になる", () => {
+    expect(formatCustomerNameForDisplay('不明顧客')).toBe('不明利用者');
+  });
+
+  it.each([
+    ['未判定sentinel', '未判定'],
+    ['実在の利用者名', '山田太郎'],
+    ['「顧客」を含む名前(部分一致では置換しない)', '顧客太郎'],
+    ['不明顧客を含む別文字列', '不明顧客A'],
+    ['空文字', ''],
+  ])('%s はそのまま返す', (_label, input) => {
+    expect(formatCustomerNameForDisplay(input)).toBe(input);
+  });
+
+  it('null/undefinedは空文字を返す', () => {
+    expect(formatCustomerNameForDisplay(null)).toBe('');
+    expect(formatCustomerNameForDisplay(undefined)).toBe('');
   });
 });

@@ -2,7 +2,7 @@
  * マスター一括修正用のCSVダウンロード/編集機能 E2Eテスト (Issue #1036)
  *
  * 前提データ: scripts/seed-issue-1036-csv-export.js
- * - 顧客マスター: 検証太郎(Issue1036)(id=issue1036-cust-1、担当ケアマネ=検証花子(Issue1036)、
+ * - 利用者マスター: 検証太郎(Issue1036)(id=issue1036-cust-1、担当ケアマネ=検証花子(Issue1036)、
  *   備考=初期備考(Issue1036)、別表記=初期別表記(Issue1036))
  */
 
@@ -63,7 +63,7 @@ test.describe('マスター一括修正用のCSVダウンロード/編集機能 
     await dialog.getByRole('button', { name: '閉じる' }).click();
     await expect(dialog).not.toBeVisible();
 
-    // 5. 一覧の顧客名が変わっていないこと(改名が反映されていないこと)
+    // 5. 一覧の利用者名が変わっていないこと(改名が反映されていないこと)
     await expect(page.locator(`text=${CUSTOMER_NAME}`)).toBeVisible({ timeout: 10000 });
     await expect(page.locator('text=検証太郎(改名試行)')).not.toBeVisible();
 

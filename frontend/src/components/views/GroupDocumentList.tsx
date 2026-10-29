@@ -95,11 +95,11 @@ function DocumentRow({ document, groupType, onClick, onRetry, identityLookup }: 
   // による「事業所要対応が同姓同名バッジの裏で隠れる」ことを防ぐ(Codex plan review指摘)。
   const reviewReasons: string[] = [];
   if (isSameNameCollision) {
-    reviewReasons.push('同姓同名の顧客マスターが複数あります。書類詳細で正しい顧客を選び直してください');
+    reviewReasons.push('同姓同名の利用者マスターが複数あります。書類詳細で正しい利用者を選び直してください');
   } else if (needsCustomerConfirmation) {
     // Issue #1034: 顧客だけが未確定(同姓同名以外の理由)の場合、以前は理由が一切表示されず
     // 「なぜ選択待ちが消えないか」が伝わらなかった。
-    reviewReasons.push('顧客が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します');
+    reviewReasons.push('利用者が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します');
   }
   if (needsOfficeConfirmation) {
     reviewReasons.push('事業所が未選択です');

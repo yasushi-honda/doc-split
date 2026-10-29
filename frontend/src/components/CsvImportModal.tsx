@@ -107,9 +107,9 @@ function isExactMatchData(
 // マスター別設定
 const TYPE_CONFIG = {
   customer: {
-    name: '顧客',
+    name: '利用者',
     columns: [
-      { key: 'name', label: '顧客名' },
+      { key: 'name', label: '利用者名' },
       { key: 'furigana', label: 'フリガナ' },
       { key: 'careManagerName', label: '担当ケアマネ' },
       { key: 'notes', label: '備考' },
@@ -870,7 +870,7 @@ export function CsvImportModal({ type, isOpen, onClose, onImport, existingRecord
               <p className="font-medium">対応カラム名:</p>
               {type === 'customer' ? (
                 <ul className="list-disc list-inside text-xs space-y-1">
-                  <li>顧客名: <code>name</code>, <code>顧客名</code>, <code>氏名</code>, <code>利用者名</code></li>
+                  <li>利用者名: <code>name</code>, <code>利用者名</code>, <code>氏名</code>, <code>顧客名</code></li>
                   <li>フリガナ: <code>furigana</code>, <code>フリガナ</code>, <code>ふりがな</code></li>
                   <li>ID: <code>id</code>, <code>ID</code>（エクスポートしたCSVのみ。この列の値がある行は名前を変更しても同じ人として更新されます。他の行にコピーしないでください）</li>
                 </ul>

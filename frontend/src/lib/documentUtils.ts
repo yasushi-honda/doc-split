@@ -7,7 +7,7 @@
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 import { Timestamp } from 'firebase/firestore';
-import type { DocumentStatus, SplitSegment } from '@shared/types';
+import { CONSTANTS, type DocumentStatus, type SplitSegment } from '@shared/types';
 // isValidCustomerSelection は元々ここに定義されていたが、functions/src/drive/customerAmbiguityGate.ts
 // (Driveエクスポートの顧客未確定ゲート、2026-07-25再設計)も同じsentinel判定を必要とするため
 // shared/customerIdentity.ts へ移設した。ここでは同一ファイル内(buildSegmentConfirmedFlags等)
@@ -90,6 +90,17 @@ export function isValidDocumentTypeSelection(name: string | null | undefined): b
   const trimmed = name.trim();
   if (trimmed === '') return false;
   return !DOCUMENT_TYPE_INVALID_SENTINELS.has(trimmed);
+}
+
+/**
+ * 利用者名を画面に出す直前の整形。
+ * OCRで特定できなかった書類の保存値'不明顧客'は、Firestore・ファイル名・照合ロジックが
+ * この文字列に依存するため書き換えず、画面表示だけ「不明利用者」に置き換える。
+ * 完全一致のときだけ置換し、実在の名前に「顧客」が含まれていても変えない。
+ */
+export function formatCustomerNameForDisplay(name: string | null | undefined): string {
+  if (name == null) return '';
+  return name === CONSTANTS.FILE_NAME_UNKNOWN_CUSTOMER ? '不明利用者' : name;
 }
 
 // ============================================

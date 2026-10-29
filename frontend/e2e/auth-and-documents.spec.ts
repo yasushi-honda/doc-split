@@ -63,15 +63,15 @@ test.describe('認証・書類一覧 @emulator', () => {
   });
 
   test('全タブが表示される', async ({ page }) => {
-    for (const tabName of ['書類一覧', '顧客別', '事業所別', '書類種別', '担当CM別']) {
+    for (const tabName of ['書類一覧', '利用者別', '事業所別', '書類種別', '担当CM別']) {
       await expect(
         page.locator('[role="tab"]').filter({ hasText: tabName })
       ).toBeVisible();
     }
   });
 
-  test('顧客別タブに切り替えられる', async ({ page }) => {
-    const tab = page.locator('[role="tab"]').filter({ hasText: '顧客別' });
+  test('利用者別タブに切り替えられる', async ({ page }) => {
+    const tab = page.locator('[role="tab"]').filter({ hasText: '利用者別' });
     await tab.click();
 
     // タブがアクティブになる
@@ -94,7 +94,7 @@ test.describe('認証・書類一覧 @emulator', () => {
 
   test('書類一覧タブに戻れる', async ({ page }) => {
     // 別タブに移動
-    await page.locator('[role="tab"]').filter({ hasText: '顧客別' }).click();
+    await page.locator('[role="tab"]').filter({ hasText: '利用者別' }).click();
     await page.waitForTimeout(500);
 
     // 書類一覧タブに戻る

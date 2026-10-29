@@ -54,7 +54,7 @@ export function decideBulkVerifyToast(params: DecideBulkVerifyToastParams): Bulk
     type: 'success',
     message:
       confirmedCount > 0
-        ? `${succeededCount}件を確認済みにしました（うち${confirmedCount}件は顧客/事業所も確定しました）`
+        ? `${succeededCount}件を確認済みにしました（うち${confirmedCount}件は利用者/事業所も確定しました）`
         : `${succeededCount}件を確認済みにしました`,
   }
 }

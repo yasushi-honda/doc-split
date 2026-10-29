@@ -68,8 +68,8 @@ test.describe('モバイルPDFビュー @emulator', () => {
 
       await page.screenshot({ path: 'test-results/mobile-4-expanded.png', fullPage: true });
 
-      // 顧客名が表示されるか確認
-      const customerName = page.locator('text=顧客名').first();
+      // 利用者名が表示されるか確認
+      const customerName = page.locator('text=利用者名').first();
       await expect(customerName).toBeVisible();
     }
   });

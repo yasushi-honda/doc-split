@@ -52,7 +52,7 @@ test.describe('再処理ボタン @emulator', () => {
     // デフォルト viewport 1280px = xl なのでページ数列が表示される
     await expect(page.locator('th:has-text("ページ数")')).toBeVisible({ timeout: 10000 });
 
-    // ページ数は 6 列目 (ファイル名/顧客名/事業所/登録日/書類日付/ページ数/ステータス/✓)
+    // ページ数は 6 列目 (ファイル名/利用者名/事業所/登録日/書類日付/ページ数/ステータス/✓)
     const PAGE_COUNT_COL = 5;
 
     // totalPages: 3 の書類（e2e-detail-001）は「3」
@@ -120,7 +120,7 @@ test.describe('再処理ボタン @emulator', () => {
 
     // 確認ダイアログに消去項目が明示される
     await expect(page.locator('text=AIで再解析しますか？')).toBeVisible({ timeout: 3000 });
-    await expect(page.locator('text=顧客名・事業所・書類種別・書類日付・担当ケアマネ')).toBeVisible();
+    await expect(page.locator('text=利用者名・事業所・書類種別・書類日付・担当ケアマネ')).toBeVisible();
 
     // キャンセルで閉じ、詳細モーダルは開いたまま
     await page.locator('button:has-text("キャンセル")').click();

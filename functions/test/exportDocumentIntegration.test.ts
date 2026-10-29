@@ -825,7 +825,7 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
         expect.fail('CustomerUnconfirmedErrorがthrowされるべき');
       } catch (error) {
         expect(error).to.be.instanceOf(CustomerUnconfirmedError);
-        expect((error as Error).message).to.include('顧客が未確定のため');
+        expect((error as Error).message).to.include('利用者が未確定のため');
         expect((error as Error).message).to.include('鈴木花子');
       }
       expect(listCalls).to.have.length(0);

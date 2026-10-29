@@ -2,11 +2,11 @@
  * グループビュー再試行ボタン E2Eテスト (#524)
  *
  * 検証内容:
- *   - 顧客別タブ: error 書類の行に「再試行」ボタンが表示され、確認ダイアログ経由で再処理できる
- *   - 担当CM別タブ: 顧客サブグループ配下の error 行にも「再試行」が表示される
+ *   - 利用者別タブ: error 書類の行に「再試行」ボタンが表示され、確認ダイアログ経由で再処理できる
+ *   - 担当CM別タブ: 利用者サブグループ配下の error 行にも「再試行」が表示される
  *
  * 前提データ: scripts/seed-e2e-data.js の seedGroupRetryTestData
- * (顧客「組合花子」/ 担当CM「五十嵐恵」配下に error 2 件 + processed 1 件。
+ * (利用者「組合花子」/ 担当CM「五十嵐恵」配下に error 2 件 + processed 1 件。
  *  functions emulator の updateDocumentGroups トリガーが documentGroups を生成する)
  */
 
@@ -18,10 +18,10 @@ test.describe('グループビュー再試行 (#524) @emulator', () => {
     await loginWithTestUser(page);
   });
 
-  test('顧客別タブの error 行から再処理を実行できる', async ({ page }) => {
-    await clickTab(page, '顧客別');
+  test('利用者別タブの error 行から再処理を実行できる', async ({ page }) => {
+    await clickTab(page, '利用者別');
 
-    // 顧客グループを展開
+    // 利用者グループを展開
     const groupHeader = page.locator('button', { hasText: '組合花子' }).first();
     await expect(groupHeader).toBeVisible({ timeout: 10000 });
     await groupHeader.click();
@@ -48,7 +48,7 @@ test.describe('グループビュー再試行 (#524) @emulator', () => {
     await expect(cmHeader).toBeVisible({ timeout: 10000 });
     await cmHeader.click();
 
-    // 第2階層: 顧客サブグループを展開
+    // 第2階層: 利用者サブグループを展開
     const customerHeader = page.locator('button', { hasText: '組合花子' }).first();
     await expect(customerHeader).toBeVisible({ timeout: 10000 });
     await customerHeader.click();
@@ -58,7 +58,7 @@ test.describe('グループビュー再試行 (#524) @emulator', () => {
     // 注: フォルダラベルはカテゴリ優先 (buildCustomerFolderGroups)。seed-e2e-data.js は
     //     masters/documents を投入しないため種別名ラベルになる。将来 seed に category 付き
     //     書類マスターを追加する場合は本アサーションのラベルも追従させること
-    // 注: エラー2 は先行の顧客別テストが再処理で消費する (workers=1 で順次実行) ため、
+    // 注: エラー2 は先行の利用者別テストが再処理で消費する (workers=1 で順次実行) ため、
     //     本テストは残存するエラー1 を対象にする
     const docTypeHeader = page.locator('button', { hasText: '請求書' }).first();
     await expect(docTypeHeader).toBeVisible({ timeout: 10000 });

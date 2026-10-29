@@ -114,7 +114,7 @@ describe('CustomerSubGroup - 同姓同名バッジ', () => {
     )
     expandToDocumentRow('松本 実', 'ケアプラン')
     expect(screen.getByText('選択待ち').getAttribute('title')).toBe(
-      '顧客が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します'
+      '利用者が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します'
     )
   })
 

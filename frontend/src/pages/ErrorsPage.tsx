@@ -62,6 +62,7 @@ import {
 } from '@/hooks/useDriveExportErrors'
 import { toast } from 'sonner'
 import { getCallableErrorMessage } from '@/lib/callFunction'
+import { formatCustomerNameForDisplay } from '@/lib/documentUtils'
 import { useAuthStore } from '@/stores/authStore'
 import type { ErrorRecord, ErrorStatus, ErrorType } from '@shared/types'
 
@@ -622,7 +623,7 @@ function DriveExportErrorRow({ row }: DriveExportErrorRowProps) {
         <TableCell className="max-w-[200px] truncate" title={row.fileName}>
           {row.fileName}
         </TableCell>
-        <TableCell>{row.customerName}</TableCell>
+        <TableCell>{formatCustomerNameForDisplay(row.customerName)}</TableCell>
         <TableCell>{row.documentType}</TableCell>
         <TableCell className="max-w-[240px] truncate" title={row.driveExportError}>
           {row.driveExportError}
@@ -686,7 +687,7 @@ function DriveExportErrorRow({ row }: DriveExportErrorRowProps) {
               </div>
               <div>
                 <p className="text-sm text-gray-500">利用者名</p>
-                <p>{row.customerName}</p>
+                <p>{formatCustomerNameForDisplay(row.customerName)}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-500">事業所</p>

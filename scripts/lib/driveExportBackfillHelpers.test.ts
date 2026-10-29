@@ -103,7 +103,16 @@ test('classifyDriveExportError: backfillのsentinelメッセージはbackfill-ma
   assert.equal(classifyDriveExportError(BACKFILL_ERROR_MESSAGE), 'backfill-marker');
 });
 
-test('classifyDriveExportError: 「顧客が未確定のため」で始まるメッセージはcustomer-unconfirmedに分類する(同姓同名リスク対応)', () => {
+test('classifyDriveExportError: 「利用者が未確定のため」で始まるメッセージはcustomer-unconfirmedに分類する(同姓同名リスク対応)', () => {
+  assert.equal(
+    classifyDriveExportError(
+      '利用者が未確定のためGoogle Driveへエクスポートできません(書類詳細で利用者を選択・保存して確定すると自動で再試行されます): 山田太郎'
+    ),
+    'customer-unconfirmed'
+  );
+});
+
+test('classifyDriveExportError: 表記統一前に保存済みの旧prefix「顧客が未確定のため」もcustomer-unconfirmedに分類する', () => {
   assert.equal(
     classifyDriveExportError(
       '顧客が未確定のためGoogle Driveへエクスポートできません(書類詳細で顧客を選択・保存して確定すると自動で再試行されます): 山田太郎'

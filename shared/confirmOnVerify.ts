@@ -199,4 +199,4 @@ export function buildConfirmOnVerifyUpdate(
  * しました」が二重に出る(codex review / pr-review-toolkit:code-reviewer 指摘、2026-09-25)。
  */
 export const CONFIRM_ON_VERIFY_SKIPPED_REASON_MESSAGE =
-  '顧客/事業所マスターの取得に失敗したため確定処理はスキップされました。再実行してください';
+  '利用者/事業所マスターの取得に失敗したため確定処理はスキップされました。再実行してください';

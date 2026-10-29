@@ -54,7 +54,7 @@ describe('decideBulkVerifyToast', () => {
 
     expect(outcome).toEqual({
       type: 'success',
-      message: '5件を確認済みにしました（うち3件は顧客/事業所も確定しました）',
+      message: '5件を確認済みにしました（うち3件は利用者/事業所も確定しました）',
     })
   })
 

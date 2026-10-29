@@ -29,7 +29,7 @@ export function MultiCustomerBadge({ document }: MultiCustomerBadgeProps) {
   return (
     <div
       className="flex items-center gap-1 truncate text-[11px] text-indigo-600"
-      title="OCRで複数の顧客名が完全一致で検出されました。1つの書類に複数人が記載されている可能性があります。"
+      title="OCRで複数の利用者名が完全一致で検出されました。1つの書類に複数人が記載されている可能性があります。"
     >
       <Users className="h-3 w-3 flex-shrink-0" />
       {label}

@@ -221,7 +221,7 @@ export function RegisterNewMasterModal({
   }, [handleRegister]);
 
   // タイプに応じたラベル
-  const typeLabel = type === 'customer' ? '顧客' : type === 'office' ? '事業所' : '書類種別';
+  const typeLabel = type === 'customer' ? '利用者' : type === 'office' ? '事業所' : '書類種別';
   const TypeIcon = type === 'customer' ? UserPlus : type === 'office' ? Building2 : FileText;
 
   return (
@@ -373,7 +373,7 @@ export function RegisterNewMasterModal({
                     disabled={isLoading}
                   />
                   <p className="text-xs text-muted-foreground">
-                    同姓同名の顧客を区別するための補足情報
+                    同姓同名の利用者を区別するための補足情報
                   </p>
                 </div>
               </>

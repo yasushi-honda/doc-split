@@ -26,7 +26,7 @@ import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
-import { formatTimestamp } from '@/lib/documentUtils'
+import { formatTimestamp, formatCustomerNameForDisplay } from '@/lib/documentUtils'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -273,7 +273,7 @@ function DocumentRow({
   // による「事業所要対応が同姓同名バッジの裏で隠れる」ことを防ぐ(Codex plan review指摘)。
   const reviewReasons: string[] = []
   if (isSameNameCollision) {
-    reviewReasons.push('同姓同名の顧客マスターが複数あります。書類詳細で正しい顧客を選び直してください')
+    reviewReasons.push('同姓同名の利用者マスターが複数あります。書類詳細で正しい利用者を選び直してください')
   } else if (needsCustomerConfirmation) {
     // codexレビュー(second opinion、comment-analyzer)指摘: 従来のコメントは同姓同名
     // ケース特有の説明をこのelse-if分岐(既にisSameNameCollisionを除外済み)に誤って
@@ -285,7 +285,7 @@ function DocumentRow({
     //   不整合) → 「確認済み」操作でもdecideCustomerConfirmがskipを返すため解消せず、
     //   書類詳細で候補を選び直す必要がある
     // UI文言はこの2ケースを区別せず一括して案内している(過不足があれば別途改善)。
-    reviewReasons.push('顧客が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します')
+    reviewReasons.push('利用者が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します')
   }
   if (needsOfficeConfirmation) {
     reviewReasons.push('事業所が未選択です')
@@ -331,7 +331,7 @@ function DocumentRow({
         </div>
       </td>
       <td className="px-2 py-2 text-xs text-gray-700 sm:px-4 sm:py-3 sm:text-sm">
-        <div>{document.customerName || '未判定'}</div>
+        <div>{formatCustomerNameForDisplay(document.customerName) || '未判定'}</div>
         {/* 担当CM表示 (Issue #813)。#424教訓により列は増やさず、既存の顧客名セル内に小さく併記する */}
         {document.careManager && (
           <div className="truncate text-[11px] text-gray-400">担当CM: {document.careManager}</div>
@@ -391,7 +391,7 @@ interface TabConfig {
 
 const VIEW_TABS: TabConfig[] = [
   { value: 'list', label: '書類一覧', icon: LayoutList },
-  { value: 'customer', label: '顧客別', icon: Users },
+  { value: 'customer', label: '利用者別', icon: Users },
   { value: 'office', label: '事業所別', icon: Building2 },
   { value: 'documentType', label: '書類種別', icon: FolderOpen },
   { value: 'careManager', label: '担当CM別', icon: UserCheck },
@@ -1411,7 +1411,7 @@ export function DocumentsPage() {
                         </th>
                       )}
                       <SortableHeader label="ファイル名" field="fileName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
-                      <SortableHeader label="顧客名" field="customerName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
+                      <SortableHeader label="利用者名" field="customerName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="事業所" field="officeName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} hideOnMobile />
                       <SortableHeader label="登録日" field="processedAt" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="書類日付" field="fileDate" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} hideOnMobile />
@@ -1505,7 +1505,7 @@ export function DocumentsPage() {
                     <>
                       選択した{selectedIds.size}件の書類を確認済みにします。
                       <br />
-                      同姓同名等の対象を除き、表示中の顧客・事業所も同時に確定します(確定後も書類詳細から変更できます)。
+                      同姓同名等の対象を除き、表示中の利用者・事業所も同時に確定します(確定後も書類詳細から変更できます)。
                     </>
                   )}
                   {bulkOperation === 'reprocess' && (

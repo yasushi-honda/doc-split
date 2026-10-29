@@ -106,7 +106,7 @@ export class CustomerUnconfirmedError extends Error {
   constructor(customerName: string) {
     super(
       `${DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX}Google Driveへエクスポートできません` +
-        `(書類詳細で顧客を選択・保存して確定すると自動で再試行されます): ${customerName}`
+        `(書類詳細で利用者を選択・保存して確定すると自動で再試行されます): ${customerName}`
     );
     this.name = 'CustomerUnconfirmedError';
   }
