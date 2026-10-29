@@ -86,6 +86,15 @@ describe('ErrorsPage - Driveエクスポートエラータブ', () => {
     expect(screen.getByText('鈴木花子')).toBeDefined()
   })
 
+  it('保存値「不明顧客」の行は、利用者名の列を「不明利用者」と表示する', () => {
+    mockRows = [{ ...sampleRow, customerName: '不明顧客' }]
+    render(<ErrorsPage />)
+    openDriveTab()
+
+    expect(screen.getByText('不明利用者')).toBeDefined()
+    expect(screen.queryByText('不明顧客')).toBeNull()
+  })
+
   it('0件の場合「エラーはありません」と表示される', () => {
     mockRows = []
     render(<ErrorsPage />)

@@ -47,7 +47,7 @@ import { resolveFolderSegments, FolderPathDocInput } from './folderPath';
 import { findOrCreateFolder } from './findOrCreateFolder';
 import { MASTER_PATHS } from '../utils/masterPaths';
 import type { Document, CustomerMaster, DriveFolderTemplate } from '../../../shared/types';
-import { DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX } from '../../../shared/types';
+import { buildCustomerUnconfirmedMessage } from './customerUnconfirmedMessage';
 import { isCustomerUnconfirmed } from './customerAmbiguityGate';
 
 const db = admin.firestore();
@@ -104,10 +104,7 @@ export class DriveSettingsIncompleteError extends Error {
  */
 export class CustomerUnconfirmedError extends Error {
   constructor(customerName: string) {
-    super(
-      `${DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX}Google Driveへエクスポートできません` +
-        `(書類詳細で利用者を選択・保存して確定すると自動で再試行されます): ${customerName}`
-    );
+    super(buildCustomerUnconfirmedMessage(customerName));
     this.name = 'CustomerUnconfirmedError';
   }
 }
