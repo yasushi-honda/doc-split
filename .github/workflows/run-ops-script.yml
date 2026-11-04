@@ -76,6 +76,11 @@ on:
           - count-undetermined-documents --since 2026-10-01 --list-ids
           - diagnose-unknown-customer-documents --since 2026-11-01
           - diagnose-unknown-customer-documents --since 2026-10-01
+          - reprocess-unknown-customer-documents --since 2026-11-01
+          - reprocess-unknown-customer-documents --since 2026-10-01
+          - reprocess-unknown-customer-documents --since 2026-10-01 --limit 2 --execute
+          - reprocess-unknown-customer-documents --since 2026-11-01 --limit 5 --execute
+          - reprocess-unknown-customer-documents --since 2026-11-01 --all --execute
           - delete-office-master --dry-run
           - delete-office-master --execute
           - reset-documents-by-office --dry-run
@@ -2614,6 +2619,15 @@ jobs:
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               npx ts-node diagnose-unknown-customer-documents.ts $SCRIPT_ARGS
+          elif [ "$SCRIPT_NAME" = "reprocess-unknown-customer-documents" ]; then
+            # ADR-0031: 利用者不明(確認なし)の書類を再処理し、前後の遷移を件数のみで測る。
+            # 既定はdry-run(対象件数のみ)。--execute は --limit N(カナリア)か --all が必須。
+            # 出力は公開ログに載るため、書類名・利用者名・ID・本文は出さない。バックアップは
+            # artifactに残さない(公開リポジトリで第三者が取得しうるため)。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node reprocess-unknown-customer-documents.ts $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "count-undetermined-documents" ]; then
             # ADR-0031: 書類種別「未判定」の件数を日別・ページ数帯・MIME別に集計する(read-only、件数のみ)。
             # 出力は公開ログに載るため、書類名・利用者名・本文は取得も出力もしない。
