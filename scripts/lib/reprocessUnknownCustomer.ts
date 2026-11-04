@@ -18,14 +18,27 @@ export interface TargetCandidate {
   processedAtMs: number | null;
   /** 利用者名が不明(isCustomerUnknown) */
   customerUnknown: boolean;
+  docTypeBucket: DocTypeBucket;
 }
 
 /**
- * 再処理してよい状態か(窓は別)。選定時と、書き込み直前のトランザクション内の再確認の両方で使う。
- * 取得後に人が確認済みにした・利用者が確定した・状態が変わった書類を、再処理しないための条件。
+ * 再処理の対象の決め方。
+ * - unknown-customer(既定): 利用者が不明な書類(書類種別は問わない)
+ * - undetermined: 書類種別が「未判定」の書類(利用者が確定済みのものも含む)
  */
-export function isReprocessEligible(d: Pick<TargetCandidate, 'status' | 'verified' | 'customerUnknown'>): boolean {
-  return d.status === 'processed' && !d.verified && d.customerUnknown;
+export type ReprocessMode = 'unknown-customer' | 'undetermined';
+
+/**
+ * 再処理してよい状態か(窓は別)。選定時と、書き込み直前のトランザクション内の再確認の両方で使う。
+ * 取得後に人が確認済みにした・利用者が確定した・書類種別が判定された・状態が変わった書類を、
+ * 再処理しないための条件。
+ */
+export function isReprocessEligible(
+  d: Pick<TargetCandidate, 'status' | 'verified' | 'customerUnknown' | 'docTypeBucket'>,
+  mode: ReprocessMode = 'unknown-customer',
+): boolean {
+  if (d.status !== 'processed' || d.verified) return false;
+  return mode === 'undetermined' ? d.docTypeBucket === 'undetermined' : d.customerUnknown;
 }
 
 /**
@@ -33,9 +46,9 @@ export function isReprocessEligible(d: Pick<TargetCandidate, 'status' | 'verifie
  * 処理日時の昇順(同時刻はID順)。limitが正の有限数なら先頭からlimit件に切る(カナリア用)。
  * limitが0以下・NaNは「全件」(誤って0件にしないため)。
  */
-export function selectReprocessTargets(docs: TargetCandidate[], sinceMs: number, limit?: number): string[] {
+export function selectReprocessTargets(docs: TargetCandidate[], sinceMs: number, limit?: number, mode: ReprocessMode = 'unknown-customer'): string[] {
   const selected = docs
-    .filter((d) => isReprocessEligible(d) && d.processedAtMs !== null && d.processedAtMs >= sinceMs)
+    .filter((d) => isReprocessEligible(d, mode) && d.processedAtMs !== null && d.processedAtMs >= sinceMs)
     .sort((a, b) => (a.processedAtMs as number) - (b.processedAtMs as number) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((d) => d.id);
   return typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? selected.slice(0, Math.floor(limit)) : selected;
@@ -43,6 +56,8 @@ export function selectReprocessTargets(docs: TargetCandidate[], sinceMs: number,
 
 export interface BeforeState {
   docTypeBucket: DocTypeBucket;
+  /** 再処理前に利用者が不明だったか(「利用者が不明でなくなった」を、元から確定済みの書類で水増ししないため) */
+  customerUnknown: boolean;
 }
 
 export interface AfterState {
@@ -61,6 +76,8 @@ export interface TransitionSummary {
   missing: number;
   /** 処理済みのうち、利用者が不明でなくなった件数 */
   customerResolved: number;
+  /** 処理済みのうち、元は利用者が確定済みだったのに、再処理で不明に戻った件数(確定値が再OCRで失われた副作用) */
+  customerLost: number;
   /** 処理済みのうち、書類種別が「未判定」でなくなった件数(再処理前に未判定だったものに限る) */
   docTypeResolved: number;
   /** 利用者または書類種別のどちらかが解消した件数(重複なし) */
@@ -79,6 +96,7 @@ export function summarizeTransitions(before: Map<string, BeforeState>, after: Ma
     error: 0,
     missing: 0,
     customerResolved: 0,
+    customerLost: 0,
     docTypeResolved: 0,
     improved: 0,
     unchanged: 0,
@@ -98,9 +116,10 @@ export function summarizeTransitions(before: Map<string, BeforeState>, after: Ma
       s.notFinished += 1;
       continue;
     }
-    const custRes = !a.customerUnknown;
+    const custRes = b.customerUnknown && !a.customerUnknown;
     const docRes = b.docTypeBucket === 'undetermined' && a.docTypeBucket !== 'undetermined';
     if (custRes) s.customerResolved += 1;
+    if (!b.customerUnknown && a.customerUnknown) s.customerLost += 1;
     if (docRes) s.docTypeResolved += 1;
     if (custRes || docRes) {
       s.improved += 1;
@@ -115,11 +134,11 @@ export function summarizeTransitions(before: Map<string, BeforeState>, after: Ma
 
 /**
  * 実行の終了コード。0=すべて完了。2=未完了が残った(部分的な結果。成功と誤読させない)。
- * 1=リセットの失敗・処理エラー・見つからない書類がある。未完了と他の問題が重なれば2(未完了を優先して知らせる)。
+ * 1=リセットの失敗・処理エラー・見つからない書類・利用者を失った書類がある。未完了と他の問題が重なれば2(未完了を優先して知らせる)。
  */
 export function exitCodeFor(s: TransitionSummary, failedResets: number): number {
   if (s.notFinished > 0) return 2;
-  if (failedResets > 0 || s.error > 0 || s.missing > 0) return 1;
+  if (failedResets > 0 || s.error > 0 || s.missing > 0 || s.customerLost > 0) return 1;
   return 0;
 }
 
