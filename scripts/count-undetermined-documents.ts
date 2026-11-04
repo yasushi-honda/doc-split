@@ -17,7 +17,13 @@
  */
 
 import * as admin from 'firebase-admin';
-import { jstDateKey, summarizeUndetermined, type UndeterminedDocInput } from './lib/undeterminedSummary';
+import {
+  isCustomerUnknown,
+  jstDayRanges,
+  parseSinceArg,
+  summarizeUndetermined,
+  type UndeterminedDocInput,
+} from './lib/undeterminedSummary';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 if (!projectId) {
@@ -31,39 +37,33 @@ function getArg(name: string): string | undefined {
 }
 
 const since = getArg('--since');
-if (!since || !/^\d{4}-\d{2}-\d{2}$/.test(since)) {
-  console.error('--since YYYY-MM-DD(JSTの日付)を指定してください');
+const sinceMs = parseSinceArg(since);
+if (!since || sinceMs === null) {
+  console.error('--since YYYY-MM-DD(JSTの実在する日付)を指定してください');
   process.exit(1);
 }
-const sinceMs = Date.parse(`${since}T00:00:00+09:00`);
-if (Number.isNaN(sinceMs)) {
-  console.error(`--since の日付が不正です: ${since}`);
-  process.exit(1);
-}
+const sinceStartMs: number = sinceMs; // process.exit後のnull除外を、関数の中でも保つ
 
 admin.initializeApp({ projectId });
 const db = admin.firestore();
 
-const UNKNOWN_CUSTOMER = '不明顧客';
 const FIELDS = ['processedAt', 'verified', 'customerName', 'totalPages', 'mimeType', 'distributionId'] as const;
 
 async function main(): Promise<void> {
-  const sinceTs = admin.firestore.Timestamp.fromMillis(sinceMs);
+  const sinceTs = admin.firestore.Timestamp.fromMillis(sinceStartMs);
   console.log(`対象: status=processed / documentType=未判定 / 処理日時(JST) >= ${since} 0時`);
 
   // 全processedの件数(率の分母)。日別はprocessedAtの範囲でcount()集計する(読み取り課金を抑える)
-  const nowMs = Date.now();
-  const DAY_MS = 24 * 60 * 60 * 1000;
   const totalByDay: Record<string, number> = {};
-  for (let start = sinceMs; start <= nowMs; start += DAY_MS) {
-    const snap = await db
+  for (const range of jstDayRanges(sinceStartMs, Date.now())) {
+    const countSnap = await db
       .collection('documents')
       .where('status', '==', 'processed')
-      .where('processedAt', '>=', admin.firestore.Timestamp.fromMillis(start))
-      .where('processedAt', '<', admin.firestore.Timestamp.fromMillis(start + DAY_MS))
+      .where('processedAt', '>=', admin.firestore.Timestamp.fromMillis(range.startMs))
+      .where('processedAt', '<', admin.firestore.Timestamp.fromMillis(range.endMs))
       .count()
       .get();
-    totalByDay[jstDateKey(start)] = snap.data().count;
+    totalByDay[range.day] = countSnap.data().count;
   }
 
   const snap = await db
@@ -77,12 +77,11 @@ async function main(): Promise<void> {
   const docs: UndeterminedDocInput[] = snap.docs.map((d) => {
     const data = d.data();
     const processedAt = data.processedAt as admin.firestore.Timestamp | undefined;
-    const name = data.customerName as string | undefined;
     const pages = data.totalPages;
     return {
       processedAtMs: processedAt ? processedAt.toMillis() : null,
       verified: data.verified === true,
-      customerUnknown: !name || name === UNKNOWN_CUSTOMER,
+      customerUnknown: isCustomerUnknown(data.customerName),
       totalPages: typeof pages === 'number' ? pages : null,
       mimeType: typeof data.mimeType === 'string' ? data.mimeType : null,
       hasDistributionId: typeof data.distributionId === 'string' && data.distributionId.length > 0,
