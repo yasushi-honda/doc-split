@@ -64,6 +64,10 @@ const ALLOWLIST = new Set([
   // 業務ロジックに使う「読者」ではないため対象外。本エントリの追加漏れがPR #921のCIを
   // ブロックしていたため2026-09-15に追記(Issue #891とは無関係の既存の見落とし)。
   'reset-document-to-pending.js',
+  // 利用者不明(確認なし)の書類をまとめてpendingへ戻し、前後の遷移を件数で測るops-script(ADR-0031)。
+  // reset-document-to-pending.jsと同じく、detail/main優先+legacy root pageResultsの両方を
+  // FieldValue.delete()する削除実行者であり、内容を読んで業務ロジックに使う「読者」ではない。
+  'reprocess-unknown-customer-documents.ts',
 ]);
 
 const EXCLUDED_DIR_NAMES = new Set(['node_modules', '.git']);
