@@ -117,6 +117,18 @@ export function jstDayRanges(sinceMs: number, nowMs: number): DayRange[] {
   return ranges;
 }
 
+const SAFE_DOC_ID = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * 再処理の対象(未確認かつ利用者不明)の書類IDを、入力順で返す。IDは個人情報ではないが、公開ログに出すため、
+ * 英数字・_・-以外の文字を含むIDは出力しない(想定外の値が混じっても文字列が漏れないようにする)。
+ */
+export function reprocessTargetIds(entries: Array<{ id: string; input: UndeterminedDocInput }>): string[] {
+  return entries
+    .filter((e) => !e.input.verified && e.input.customerUnknown && SAFE_DOC_ID.test(e.id))
+    .map((e) => e.id);
+}
+
 function increment(map: Record<string, number>, key: string): void {
   map[key] = (map[key] ?? 0) + 1;
 }

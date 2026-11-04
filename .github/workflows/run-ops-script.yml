@@ -72,6 +72,8 @@ on:
           - inspect-ocr-volume-stats --days 90 --sample-limit 20000
           - count-undetermined-documents --since 2026-11-01
           - count-undetermined-documents --since 2026-10-01
+          - count-undetermined-documents --since 2026-11-01 --list-ids
+          - count-undetermined-documents --since 2026-10-01 --list-ids
           - delete-office-master --dry-run
           - delete-office-master --execute
           - reset-documents-by-office --dry-run
