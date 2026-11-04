@@ -28,6 +28,7 @@ import * as admin from 'firebase-admin';
 import { isCustomerUnknown, parseSinceArg } from './lib/undeterminedSummary';
 import { bucketDocumentType, bucketStatus } from './lib/unknownCustomerDiagnosis';
 import {
+  isReprocessEligible,
   selectReprocessTargets,
   summarizeTransitions,
   type AfterState,
@@ -155,38 +156,45 @@ async function main(): Promise<void> {
   }
   assertPaddleProvider();
 
-  // 1) pendingへ戻す(pageResultsのキャッシュもクリア)
-  let reset = 0;
+  // 1) pendingへ戻す(pageResultsのキャッシュもクリア)。適格性の再確認と書き込みを、書類ごとの
+  //    トランザクションで原子的に行う(取得後に人が確認済みにした書類を再処理しないため)。
+  //    再処理した書類のIDだけを控え、待機と集計はそのIDに限る(スキップした書類を混ぜない)。
+  const resetIds: string[] = [];
   for (const id of ids) {
     const ref = db.doc(`documents/${id}`);
     const detailRef = db.doc(`documents/${id}/detail/main`);
-    const [docSnap, detailSnap] = await Promise.all([ref.get(), detailRef.get()]);
-    const data = docSnap.data();
-    // 取得後に状態が変わった書類(確認済みになった等)は触らない
-    if (!data || data.status !== 'processed' || data.verified === true) continue;
-    const hasDetail = detailSnap.exists && detailSnap.data()?.pageResults !== undefined;
-    const hasLegacy = data.pageResults !== undefined;
-    const batch = db.batch();
-    batch.update(ref, {
-      status: 'pending',
-      retryCount: 0,
-      lastErrorMessage: null,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      pass2Promotion: admin.firestore.FieldValue.delete(),
-      errorRescueCount: admin.firestore.FieldValue.delete(),
-      lastRescuedAt: admin.firestore.FieldValue.delete(),
-      retryAfter: admin.firestore.FieldValue.delete(),
-      ...(hasLegacy ? { pageResults: admin.firestore.FieldValue.delete() } : {}),
+    const done = await db.runTransaction(async (tx) => {
+      const [docSnap, detailSnap] = await Promise.all([tx.get(ref), tx.get(detailRef)]);
+      const data = docSnap.data();
+      if (
+        !data ||
+        !isReprocessEligible({ status: bucketStatus(data.status), verified: data.verified === true, customerUnknown: isCustomerUnknown(data.customerName) })
+      ) {
+        return false;
+      }
+      const hasDetail = detailSnap.exists && detailSnap.data()?.pageResults !== undefined;
+      const hasLegacy = data.pageResults !== undefined;
+      tx.update(ref, {
+        status: 'pending',
+        retryCount: 0,
+        lastErrorMessage: null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        pass2Promotion: admin.firestore.FieldValue.delete(),
+        errorRescueCount: admin.firestore.FieldValue.delete(),
+        lastRescuedAt: admin.firestore.FieldValue.delete(),
+        retryAfter: admin.firestore.FieldValue.delete(),
+        ...(hasLegacy ? { pageResults: admin.firestore.FieldValue.delete() } : {}),
+      });
+      if (hasDetail) tx.update(detailRef, { pageResults: admin.firestore.FieldValue.delete() });
+      return true;
     });
-    if (hasDetail) batch.update(detailRef, { pageResults: admin.firestore.FieldValue.delete() });
-    await batch.commit();
-    reset += 1;
+    if (done) resetIds.push(id);
   }
-  console.log(`✓ pendingへ戻した: ${reset}件(取得後に状態が変わり対象外にした: ${ids.length - reset}件)`);
-  if (reset === 0) return;
+  console.log(`✓ pendingへ戻した: ${resetIds.length}件(取得後に状態が変わり対象外にした: ${ids.length - resetIds.length}件)`);
+  if (resetIds.length === 0) return;
 
   // 2) 完了を待つ(読み取りのみ。副作用なし)
-  const refs = ids.map((id) => db.doc(`documents/${id}`));
+  const refs = resetIds.map((id) => db.doc(`documents/${id}`));
   const deadline = Date.now() + waitMinutes * 60_000;
   let lastUnfinished = -1;
   for (;;) {
@@ -207,13 +215,15 @@ async function main(): Promise<void> {
   finalSnaps.forEach((s, i) => {
     if (!s.exists) return;
     const data = s.data() ?? {};
-    after.set(ids[i], {
+    after.set(resetIds[i], {
       status: bucketStatus(data.status),
       customerUnknown: isCustomerUnknown(data.customerName),
       docTypeBucket: bucketDocumentType(data.documentType),
     });
   });
-  const s = summarizeTransitions(before, after);
+  const resetBefore = new Map<string, BeforeState>();
+  for (const id of resetIds) resetBefore.set(id, before.get(id) as BeforeState);
+  const s = summarizeTransitions(resetBefore, after);
   console.log('');
   console.log(`結果(再処理した ${s.total}件)`);
   console.log(`  改善(利用者または書類種別が解消): ${s.improved}件`);

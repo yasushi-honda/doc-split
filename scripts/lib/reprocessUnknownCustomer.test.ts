@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  isReprocessEligible,
   selectReprocessTargets,
   summarizeTransitions,
   type AfterState,
@@ -108,4 +109,27 @@ test('summarizeTransitions: 対象が0件でも崩れない', () => {
   const s = summarizeTransitions(new Map(), new Map());
   assert.equal(s.total, 0);
   assert.equal(s.improved, 0);
+});
+
+test('isReprocessEligible: processed・確認なし・利用者不明のときだけ真(トランザクション内の再確認に使う)', () => {
+  assert.equal(isReprocessEligible({ status: 'processed', verified: false, customerUnknown: true }), true);
+  assert.equal(isReprocessEligible({ status: 'processed', verified: true, customerUnknown: true }), false); // 取得後に確認済みになった
+  assert.equal(isReprocessEligible({ status: 'processed', verified: false, customerUnknown: false }), false); // 取得後に利用者が確定した
+  assert.equal(isReprocessEligible({ status: 'pending', verified: false, customerUnknown: true }), false);
+  assert.equal(isReprocessEligible({ status: 'error', verified: false, customerUnknown: true }), false);
+});
+
+test('summarizeTransitions: 再処理したIDだけを渡せば、スキップした書類は集計に入らない', () => {
+  const all = new Map<string, BeforeState>([
+    ['reset', B('undetermined')],
+    ['skipped', B('undetermined')],
+  ]);
+  const resetOnly = new Map([...all].filter(([id]) => id === 'reset'));
+  const after = new Map<string, AfterState>([
+    ['reset', A({ customerUnknown: false })],
+    ['skipped', A({ customerUnknown: false })], // 触っていないのに、別の理由で変わった
+  ]);
+  const s = summarizeTransitions(resetOnly, after);
+  assert.equal(s.total, 1);
+  assert.equal(s.improved, 1);
 });

@@ -77,6 +77,8 @@ on:
           - diagnose-unknown-customer-documents --since 2026-11-01
           - diagnose-unknown-customer-documents --since 2026-10-01
           - reprocess-unknown-customer-documents --since 2026-11-01
+          - reprocess-unknown-customer-documents --since 2026-10-01
+          - reprocess-unknown-customer-documents --since 2026-10-01 --limit 2 --execute
           - reprocess-unknown-customer-documents --since 2026-11-01 --limit 5 --execute
           - reprocess-unknown-customer-documents --since 2026-11-01 --all --execute
           - delete-office-master --dry-run

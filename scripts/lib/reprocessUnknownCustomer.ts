@@ -21,13 +21,21 @@ export interface TargetCandidate {
 }
 
 /**
+ * 再処理してよい状態か(窓は別)。選定時と、書き込み直前のトランザクション内の再確認の両方で使う。
+ * 取得後に人が確認済みにした・利用者が確定した・状態が変わった書類を、再処理しないための条件。
+ */
+export function isReprocessEligible(d: Pick<TargetCandidate, 'status' | 'verified' | 'customerUnknown'>): boolean {
+  return d.status === 'processed' && !d.verified && d.customerUnknown;
+}
+
+/**
  * 再処理の対象IDを返す。窓(sinceMs以降の処理日時)の内側・processed・人の確認なし・利用者不明の書類。
  * 処理日時の昇順(同時刻はID順)。limitが正の有限数なら先頭からlimit件に切る(カナリア用)。
  * limitが0以下・NaNは「全件」(誤って0件にしないため)。
  */
 export function selectReprocessTargets(docs: TargetCandidate[], sinceMs: number, limit?: number): string[] {
   const selected = docs
-    .filter((d) => d.status === 'processed' && !d.verified && d.customerUnknown && d.processedAtMs !== null && d.processedAtMs >= sinceMs)
+    .filter((d) => isReprocessEligible(d) && d.processedAtMs !== null && d.processedAtMs >= sinceMs)
     .sort((a, b) => (a.processedAtMs as number) - (b.processedAtMs as number) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((d) => d.id);
   return typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? selected.slice(0, Math.floor(limit)) : selected;
