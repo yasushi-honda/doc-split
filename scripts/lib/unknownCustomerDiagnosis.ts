@@ -201,3 +201,17 @@ export function dailyRateRows(totalByDay: Record<string, number>, unknownByDay: 
     return { day, total, unknown, rate: total > 0 ? `${((unknown / total) * 100).toFixed(1)}%` : '-' };
   });
 }
+
+/**
+ * 利用者不明のprocessed書類を、窓(sinceMs以降)の内側に限って、処理日時のJST日別に数える。
+ * 利用者不明の率の分子に使う。分母(その日のprocessed全体)は窓の内側だけを数えるため、分子も同じ窓に
+ * そろえる(窓の外の書類が混ざると、月別の率が過大になり、窓より前の日付に分母0の行が出る)。
+ */
+export function unknownProcessedByDay(docs: DiagnosisDocInput[], sinceMs: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const d of docs) {
+    if (d.status !== 'processed' || d.processedAtMs === null || d.processedAtMs < sinceMs) continue;
+    increment(out, jstDateKey(d.processedAtMs));
+  }
+  return out;
+}

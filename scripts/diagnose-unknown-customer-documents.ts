@@ -22,6 +22,7 @@ import {
   bucketStatus,
   dailyRateRows,
   summarizeDiagnosis,
+  unknownProcessedByDay,
   type DiagnosisDocInput,
 } from './lib/unknownCustomerDiagnosis';
 
@@ -128,17 +129,11 @@ async function main(): Promise<void> {
       .get();
     totalByDay[range.day] = countSnap.data().count;
   }
-  const unknownProcessedByDay: Record<string, number> = {};
-  for (const d of docs) {
-    if (d.status === 'processed' && d.processedAtMs !== null) {
-      const day = new Date(d.processedAtMs + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      unknownProcessedByDay[day] = (unknownProcessedByDay[day] ?? 0) + 1;
-    }
-  }
+  const unknownByDay = unknownProcessedByDay(docs, sinceStartMs);
   console.log('');
   console.log('利用者不明の率(日別、JST。分母=その日に処理されたprocessedの全体、分子=うち利用者不明のprocessed)');
   console.log('日(JST) | processed全体 | 利用者不明 | 率');
-  const rows = dailyRateRows(totalByDay, unknownProcessedByDay);
+  const rows = dailyRateRows(totalByDay, unknownByDay);
   for (const r of rows) console.log(`${r.day} | ${r.total} | ${r.unknown} | ${r.rate}`);
   // 月別の合計(10月・11月の比較用)
   const byMonth: Record<string, { total: number; unknown: number }> = {};
