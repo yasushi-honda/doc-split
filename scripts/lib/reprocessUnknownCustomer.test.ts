@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  exitCodeFor,
   isReprocessEligible,
   selectReprocessTargets,
   summarizeTransitions,
@@ -132,4 +133,24 @@ test('summarizeTransitions: 再処理したIDだけを渡せば、スキップ�
   const s = summarizeTransitions(resetOnly, after);
   assert.equal(s.total, 1);
   assert.equal(s.improved, 1);
+});
+
+const CLEAN = { total: 3, notFinished: 0, error: 0, missing: 0, customerResolved: 0, docTypeResolved: 0, improved: 0, unchanged: 3, worsened: 0 };
+
+test('exitCodeFor: すべて完了していれば0', () => {
+  assert.equal(exitCodeFor(CLEAN, 0), 0);
+});
+
+test('exitCodeFor: 未完了が残れば2(部分的な結果を、成功と誤読させない)', () => {
+  assert.equal(exitCodeFor({ ...CLEAN, notFinished: 1 }, 0), 2);
+});
+
+test('exitCodeFor: リセットの失敗・処理エラー・見つからない書類があれば1', () => {
+  assert.equal(exitCodeFor(CLEAN, 1), 1);
+  assert.equal(exitCodeFor({ ...CLEAN, error: 1 }, 0), 1);
+  assert.equal(exitCodeFor({ ...CLEAN, missing: 1 }, 0), 1);
+});
+
+test('exitCodeFor: 未完了と他の問題が重なれば2(未完了を優先して知らせる)', () => {
+  assert.equal(exitCodeFor({ ...CLEAN, notFinished: 1, error: 1 }, 1), 2);
 });

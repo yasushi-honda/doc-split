@@ -112,3 +112,13 @@ export function summarizeTransitions(before: Map<string, BeforeState>, after: Ma
   }
   return s;
 }
+
+/**
+ * 実行の終了コード。0=すべて完了。2=未完了が残った(部分的な結果。成功と誤読させない)。
+ * 1=リセットの失敗・処理エラー・見つからない書類がある。未完了と他の問題が重なれば2(未完了を優先して知らせる)。
+ */
+export function exitCodeFor(s: TransitionSummary, failedResets: number): number {
+  if (s.notFinished > 0) return 2;
+  if (failedResets > 0 || s.error > 0 || s.missing > 0) return 1;
+  return 0;
+}

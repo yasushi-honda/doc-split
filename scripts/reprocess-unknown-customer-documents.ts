@@ -28,6 +28,7 @@ import * as admin from 'firebase-admin';
 import { isCustomerUnknown, parseSinceArg } from './lib/undeterminedSummary';
 import { bucketDocumentType, bucketStatus } from './lib/unknownCustomerDiagnosis';
 import {
+  exitCodeFor,
   isReprocessEligible,
   selectReprocessTargets,
   summarizeTransitions,
@@ -87,6 +88,20 @@ const POLL_INTERVAL_MS = 30_000;
 function toMs(v: unknown): number | null {
   const t = v as admin.firestore.Timestamp | undefined;
   return t && typeof t.toMillis === 'function' ? t.toMillis() : null;
+}
+
+/** 読み取りだけの処理を、一時的なエラーに備えて数回やり直す(副作用がないため安全) */
+async function withReadRetry<T>(fn: () => Promise<T>, attempts = 4): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+    }
+  }
+  throw lastErr;
 }
 
 /** 実機のprocessOCRがPaddleで動いていることを確認する(reset-document-to-pending.jsと同じ。Geminiへ倒れる事故の防止) */
@@ -160,10 +175,14 @@ async function main(): Promise<void> {
   //    トランザクションで原子的に行う(取得後に人が確認済みにした書類を再処理しないため)。
   //    再処理した書類のIDだけを控え、待機と集計はそのIDに限る(スキップした書類を混ぜない)。
   const resetIds: string[] = [];
+  const failureCodes: Record<string, number> = {};
+  let failedResets = 0;
   for (const id of ids) {
     const ref = db.doc(`documents/${id}`);
     const detailRef = db.doc(`documents/${id}/detail/main`);
-    const done = await db.runTransaction(async (tx) => {
+    let done = false;
+    try {
+      done = await db.runTransaction(async (tx) => {
       const [docSnap, detailSnap] = await Promise.all([tx.get(ref), tx.get(detailRef)]);
       const data = docSnap.data();
       if (
@@ -187,30 +206,52 @@ async function main(): Promise<void> {
       });
       if (hasDetail) tx.update(detailRef, { pageResults: admin.firestore.FieldValue.delete() });
       return true;
-    });
+      });
+    } catch (err) {
+      // 1件の失敗で全体を止めない(すでにpendingへ戻した書類を、集計されないまま残さないため)。
+      // 出力はエラーコードの件数のみ(エラーメッセージには書類のパスが含まれうる)。
+      failedResets += 1;
+      const code = String((err as { code?: unknown }).code ?? 'unknown').slice(0, 40);
+      failureCodes[code] = (failureCodes[code] ?? 0) + 1;
+    }
     if (done) resetIds.push(id);
   }
-  console.log(`✓ pendingへ戻した: ${resetIds.length}件(取得後に状態が変わり対象外にした: ${ids.length - resetIds.length}件)`);
-  if (resetIds.length === 0) return;
+  const skipped = ids.length - resetIds.length - failedResets;
+  console.log(`✓ pendingへ戻した: ${resetIds.length}件(取得後に状態が変わり対象外にした: ${skipped}件 / リセットに失敗: ${failedResets}件)`);
+  if (failedResets > 0) {
+    console.log(`  失敗のエラーコード: ${Object.entries(failureCodes).map(([k, v]) => `${k}=${v}`).join(', ')}`);
+  }
+  if (resetIds.length === 0) {
+    process.exitCode = failedResets > 0 ? 1 : 0;
+    return;
+  }
 
   // 2) 完了を待つ(読み取りのみ。副作用なし)
   const refs = resetIds.map((id) => db.doc(`documents/${id}`));
   const deadline = Date.now() + waitMinutes * 60_000;
   let lastUnfinished = -1;
+  let timedOut = false;
   for (;;) {
-    const snaps = await db.getAll(...refs, { fieldMask: ['status'] });
+    const snaps = await withReadRetry(() => db.getAll(...refs, { fieldMask: ['status'] }));
     const unfinished = snaps.filter((s) => {
       const st = s.exists ? bucketStatus(s.data()?.status) : 'missing';
       return st === 'pending' || st === 'processing';
     }).length;
     if (unfinished !== lastUnfinished) console.log(`待機: 未完了 ${unfinished}件`);
     lastUnfinished = unfinished;
-    if (unfinished === 0 || Date.now() >= deadline) break;
+    if (unfinished === 0) break;
+    if (Date.now() >= deadline) {
+      timedOut = true;
+      break;
+    }
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+  }
+  if (timedOut) {
+    console.log(`WARN: 待機が上限(${waitMinutes}分)に達しました。未完了の書類は、processOCR側で処理が続きます(下の集計には、完了した分だけが入ります)`);
   }
 
   // 3) 前後を比べる
-  const finalSnaps = await db.getAll(...refs, { fieldMask: ['status', 'customerName', 'documentType'] });
+  const finalSnaps = await withReadRetry(() => db.getAll(...refs, { fieldMask: ['status', 'customerName', 'documentType'] }));
   const after = new Map<string, AfterState>();
   finalSnaps.forEach((s, i) => {
     if (!s.exists) return;
@@ -232,10 +273,13 @@ async function main(): Promise<void> {
   console.log(`  変化なし: ${s.unchanged}件`);
   console.log(`  悪化(判定済みだった書類種別が未判定に): ${s.worsened}件`);
   console.log(`  エラー: ${s.error}件 / 未完了: ${s.notFinished}件 / 見つからない: ${s.missing}件`);
+  const code = exitCodeFor(s, failedResets);
+  if (code !== 0) console.log(`終了コード ${code}(2=未完了あり、1=リセット失敗・エラー・見つからない書類あり)`);
+  process.exitCode = code;
 }
 
 main()
-  .then(() => process.exit(0))
+  .then(() => process.exit(process.exitCode ?? 0))
   .catch((err) => {
     console.error('ERROR:', err instanceof Error ? err.message : String(err));
     process.exit(1);
