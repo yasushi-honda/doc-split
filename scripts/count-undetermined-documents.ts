@@ -116,6 +116,8 @@ async function main(): Promise<void> {
     console.log('');
     console.log(`再処理の対象候補の書類ID(${ids.length}件):`);
     for (const id of ids) console.log(id);
+    const dropped = s.reprocessTargets - ids.length;
+    if (dropped > 0) console.log(`形式検査で出力しなかったID: ${dropped}件(対象候補の件数と食い違う場合の確認用)`);
   }
 }
 
