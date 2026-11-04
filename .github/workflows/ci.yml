@@ -8,7 +8,10 @@ on:
 
 jobs:
   lint-build-test:
-    runs-on: ubuntu-latest
+    # ubuntu-latest が ubuntu 26.04 になり、Playwright が未対応のため「Install Playwright browsers」が
+    # `Playwright does not support chromium on ubuntu26.04-x64` で失敗する(2026-11-04、PR #1200のCIで確認)。
+    # Playwrightが26.04に対応するまで24.04に固定する。他のワークフローはPlaywrightを使わないため対象外。
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
