@@ -74,6 +74,7 @@ on:
           - count-undetermined-documents --since 2026-10-01
           - count-undetermined-documents --since 2026-11-01 --list-ids
           - count-undetermined-documents --since 2026-10-01 --list-ids
+          - diagnose-unknown-customer-documents --since 2026-11-01
           - delete-office-master --dry-run
           - delete-office-master --execute
           - reset-documents-by-office --dry-run
@@ -2605,6 +2606,13 @@ jobs:
               STORAGE_BUCKET="$STORAGE_BUCKET" \
               node "scripts/${SCRIPT_NAME}.js" \
                 --out "${GITHUB_WORKSPACE}/scripts/audit-session61-parent-provenance-output.json"
+          elif [ "$SCRIPT_NAME" = "diagnose-unknown-customer-documents" ]; then
+            # ADR-0031: 利用者不明(customerName='不明顧客')の書類を、処理日時・書類種別・状態への依存を外して
+            # 件数のみで診断する(read-only)。出力は公開ログに載るため、書類名・利用者名・本文は出さない。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node diagnose-unknown-customer-documents.ts $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "count-undetermined-documents" ]; then
             # ADR-0031: 書類種別「未判定」の件数を日別・ページ数帯・MIME別に集計する(read-only、件数のみ)。
             # 出力は公開ログに載るため、書類名・利用者名・本文は取得も出力もしない。
