@@ -253,7 +253,7 @@ flowchart LR
 | リソース | 設定 |
 |----------|------|
 | リージョン | `asia-northeast1` (東京) |
-| Functions | 2nd gen, Node.js 20 |
+| Functions | 2nd gen, Node.js 22(2026-11-04にNode.js 20から引き上げ。Node.js 20は2026-10-30に廃止) |
 | Firestore | Native mode |
 | Storage | Standard |
 | Hosting | Firebase Hosting (PWA対応) |
