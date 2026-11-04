@@ -72,3 +72,21 @@ test('paddleOcrModelHashes: hfRepoId/hfRevisionが両モデルとも設定され
   assert.ok(expected.textRecognition.hfRepoId.length > 0);
   assert.ok(expected.textRecognition.hfRevision.length > 0);
 });
+
+test('paddleOcrModelHashes: docOrientation(ページ向き分類)が固定revision・3ファイルのSHA-256つきで定義されていること', () => {
+  // 横向き・上下逆のFAX帳票が「未判定」になる事象の修正(ADR-0031)。このモデルはmanifest.json(24文書PoC)の
+  // 対象外のため、manifestとの突合ではなく、固定情報が欠けていないこと(欠けると検証なしで取得される)を守る。
+  const expected = loadJson(EXPECTED_HASHES_PATH) as {
+    docOrientation: { hfRepoId: string; hfRevision: string; fileHashes: Record<string, string> };
+  };
+  assert.equal(expected.docOrientation.hfRepoId, 'PaddlePaddle/PP-LCNet_x1_0_doc_ori');
+  assert.match(expected.docOrientation.hfRevision, /^[0-9a-f]{40}$/);
+  assert.deepEqual(Object.keys(expected.docOrientation.fileHashes).sort(), [
+    'inference.json',
+    'inference.pdiparams',
+    'inference.yml',
+  ]);
+  for (const [fname, hash] of Object.entries(expected.docOrientation.fileHashes)) {
+    assert.match(hash, /^[0-9a-f]{64}$/, `docOrientation/${fname}: SHA-256の形式が不正です`);
+  }
+});

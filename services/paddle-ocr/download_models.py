@@ -2,7 +2,7 @@
 """ADR-0025 PR4a: モデル取得スクリプト(ビルド時専用)。
 
 expected-model-hashes.json に固定されたHugging Faceリポジトリのimmutable revisionから
-PP-OCRv6 medium det/recモデルを取得し、SHA-256を検証したうえで、実行時に読み込む固定パス
+PP-OCRv6 medium det/recモデルとページ向き分類モデルを取得し、SHA-256を検証したうえで、実行時に読み込む固定パス
 (dest配下)へ配置する。
 
 設計上の要点(v2、codex review pass2指摘反映):
@@ -37,6 +37,8 @@ REQUIRED_FILES = ("inference.json", "inference.pdiparams", "inference.yml")
 MODEL_KINDS = {
     "textDetection": "PP-OCRv6_medium_det",
     "textRecognition": "PP-OCRv6_medium_rec",
+    # ページ向き(0/90/180/270度)の分類モデル。無いと横向き・上下逆のFAX帳票が読めない(ADR-0031)。
+    "docOrientation": "PP-LCNet_x1_0_doc_ori",
 }
 
 

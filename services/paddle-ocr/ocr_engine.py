@@ -13,6 +13,9 @@ FileNotFoundError を送出する(ダウンロードしない)。取得ロジッ
 コンストラクタ引数・結合順序はscripts/generate-paddle-ocr-golden-text.pyのocr_single_page_pdf()と
 一字一句一致させること。変更した場合、ADR-0025が実測した94/96正解という結果が無効になるため、
 scripts/generate-paddle-ocr-golden-text.pyの再実行による再検証が必須。
+(例外の記録: 2026-11-04にページ向き補正(use_doc_orientation_classify)を追加した。正常な向きのgolden
+6ページは本番設定と補正ありでOCRテキストが完全一致することを確認済みで、det/recの重みと
+結合順序は不変。詳細はADR-0031。)
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from hashutil import sha256_file
 
 DET_MODEL_NAME = "PP-OCRv6_medium_det"
 REC_MODEL_NAME = "PP-OCRv6_medium_rec"
+DOC_ORI_MODEL_NAME = "PP-LCNet_x1_0_doc_ori"
 
 
 def _verify_model_hashes(model_root: Path, expected: dict) -> None:
@@ -33,7 +37,11 @@ def _verify_model_hashes(model_root: Path, expected: dict) -> None:
     誤ったイメージへの差し替えを実行時に検知するため。100MB級のファイルでもSHA-256計算は
     数百ms程度でcold startへの影響は無視できる。
     """
-    for kind, dirname in (("textDetection", DET_MODEL_NAME), ("textRecognition", REC_MODEL_NAME)):
+    for kind, dirname in (
+        ("textDetection", DET_MODEL_NAME),
+        ("textRecognition", REC_MODEL_NAME),
+        ("docOrientation", DOC_ORI_MODEL_NAME),
+    ):
         spec = expected[kind]
         model_dir = model_root / dirname
         for fname, expected_hash in spec["fileHashes"].items():
@@ -92,6 +100,7 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
 
     det_dir = model_root / DET_MODEL_NAME
     rec_dir = model_root / REC_MODEL_NAME
+    doc_ori_dir = model_root / DOC_ORI_MODEL_NAME
 
     # lang指定はtext_detection_model_name/text_recognition_model_name指定時は無視される
     # (scripts/generate-paddle-ocr-golden-text.pyで実測済みの挙動)ため渡さない。
@@ -115,7 +124,13 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
         text_detection_model_dir=str(det_dir),
         text_recognition_model_name=REC_MODEL_NAME,
         text_recognition_model_dir=str(rec_dir),
-        use_doc_orientation_classify=False,
+        # ページ向きの自動補正(0/90/180/270度)。Gemini時代は画像を見て向きを吸収できたが、PaddleOCRは
+        # 補正しないと横向き・上下逆のFAX帳票を読めない(合成の横向き帳票で、90度の片方向と180度が
+        # 重要語0/13、出力が数字だけになることを再現。補正ありは4方向とも13/13。ADR-0031)。
+        # 正常な向きのページのテキストはgoldenと同一(回帰なし)であることを確認済み。
+        doc_orientation_classify_model_name=DOC_ORI_MODEL_NAME,
+        doc_orientation_classify_model_dir=str(doc_ori_dir),
+        use_doc_orientation_classify=True,
         use_doc_unwarping=False,
         use_textline_orientation=False,
         enable_mkldnn=True,

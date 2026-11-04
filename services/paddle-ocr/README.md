@@ -56,7 +56,9 @@ ADR-0025(PaddleOCR移行)のPR4: 自前ホスティングPaddleOCR(PP-OCRv6 medi
 
 ## モデル同一性担保
 
-`expected-model-hashes.json`にHugging Faceリポジトリのimmutable revisionと重み本体3ファイル(`inference.json`/`inference.pdiparams`/`inference.yml`)のSHA-256を固定している。値は[`scripts/fixtures/paddle-ocr-golden/manifest.json`](../../scripts/fixtures/paddle-ocr-golden/manifest.json)の実測値(24文書PoCで94/96正解を出した重みそのもの)と同一。`download_models.py`がビルド時にこのrevisionから取得・検証し、`ocr_engine.py`が起動時に再検証する(fail-loud)。
+`expected-model-hashes.json`にHugging Faceリポジトリのimmutable revisionと重み本体3ファイル(`inference.json`/`inference.pdiparams`/`inference.yml`)のSHA-256を、モデルごと(det/rec/向き分類)に固定している。値は[`scripts/fixtures/paddle-ocr-golden/manifest.json`](../../scripts/fixtures/paddle-ocr-golden/manifest.json)の実測値(24文書PoCで94/96正解を出した重みそのもの)と同一。`download_models.py`がビルド時にこのrevisionから取得・検証し、`ocr_engine.py`が起動時に再検証する(fail-loud)。
+
+**ページ向き分類モデル(`PP-LCNet_x1_0_doc_ori`、`docOrientation`)**: 横向き・上下逆のFAX帳票を読むために追加した(ADR-0031)。det/recと同じ方式(固定revision+SHA-256のビルド時取得・起動時再検証)で固定している。無いと起動時検証で止まる(欠けたまま起動して横向き帳票が黙って読めなくなる事態を避ける)。このモデルのハッシュは`manifest.json`には無く(24文書PoCの対象外)、`expected-model-hashes.json`が正本。
 
 値を変更する場合は`scripts/generate-paddle-ocr-golden-text.py`をローカル再実行して精度を再検証し、`manifest.json`と`expected-model-hashes.json`を同時更新すること(無検証での更新は禁止)。
 
