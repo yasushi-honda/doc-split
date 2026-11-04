@@ -1,5 +1,5 @@
 {
-  "_comment": "ADR-0025 PR4a: PP-OCRv6 mediumモデルの同一性担保。hfRevisionはHugging Faceリポジトリのimmutable commit sha。fileHashesはscripts/fixtures/paddle-ocr-golden/manifest.jsonの実測値と同一(2026-09-12、24文書PoCで94/96正解を出した重みそのもの)。値を変更する場合はscripts/generate-paddle-ocr-golden-text.pyをローカル再実行して精度を再検証し、manifest.jsonと本ファイルを同時更新すること。無検証での更新は禁止。",
+  "_comment": "ADR-0025 PR4a: PP-OCRv6 medium(textDetection/textRecognition)の同一性担保。hfRevisionはHugging Faceリポジトリのimmutable commit sha。textDetection/textRecognitionのfileHashesはscripts/fixtures/paddle-ocr-golden/manifest.jsonの実測値と同一(2026-09-12、24文書PoCで94/96正解を出した重みそのもの)。値を変更する場合はscripts/generate-paddle-ocr-golden-text.pyをローカル再実行して精度を再検証し、manifest.jsonと本ファイルを同時更新すること。無検証での更新は禁止。 docOrientation(PP-LCNet_x1_0_doc_ori、2026-11-04追加、ADR-0031)はmanifest.jsonの対象外(24文書PoCの重みではない)で、本ファイルが正本。変更する場合はADR-0031の手順(golden 6ページの補正なし/あり一致+合成横向き帳票)で再確認すること。",
   "textDetection": {
     "hfRepoId": "PaddlePaddle/PP-OCRv6_medium_det",
     "hfRevision": "8e0f56fb2ef86b461d99cfc7ac5c137738985f61",
@@ -16,6 +16,15 @@
       "inference.json": "0b2e25e990bd072f1bf77d59d67d508bce6c4bd44af6624e0fb27d6da2cd00e8",
       "inference.pdiparams": "1b01c79a914587933f615569e75de54f2e638ebb5d3f3b3c1b38c24ede8c7319",
       "inference.yml": "991b700facf5b50a7de193468207d5f4255b538dde0d312ae3b7c7a9b6873129"
+    }
+  },
+  "docOrientation": {
+    "hfRepoId": "PaddlePaddle/PP-LCNet_x1_0_doc_ori",
+    "hfRevision": "d3b95a6dff5fe8a94f2748e12b61cb26818a0df8",
+    "fileHashes": {
+      "inference.json": "3580978602f309c3554508dd85d4fe09b73a7e0d80d7f9e63258f5b72c390c69",
+      "inference.pdiparams": "e8d6e7c5d264507e40e58a655779059d616b20d7441ea22047d829eb3931989c",
+      "inference.yml": "9e195eb729a8173588cd0e8a852c8b373aa606e79e77b4ac7d8346f5426caf26"
     }
   }
 }
