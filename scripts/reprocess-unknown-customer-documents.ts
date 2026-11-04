@@ -29,6 +29,7 @@ import { isCustomerUnknown, parseSinceArg } from './lib/undeterminedSummary';
 import { bucketDocumentType, bucketStatus } from './lib/unknownCustomerDiagnosis';
 import {
   exitCodeFor,
+  fitsInWaitWindow,
   isReprocessEligible,
   selectReprocessTargets,
   summarizeTransitions,
@@ -169,6 +170,13 @@ async function main(): Promise<void> {
     console.log('対象が0件のため何もしません');
     return;
   }
+  if (!fitsInWaitWindow(ids.length, waitMinutes)) {
+    console.error(
+      `ERROR: 対象${ids.length}件は、待機${waitMinutes}分(処理能力は1分5件)で終わる見込みを超えます。書き込みの前に中断します。--limit で分けるか、--wait-minutes を増やしてください。`,
+    );
+    process.exit(1);
+  }
+  console.log(`注意: 再処理した書類は、新しく届く書類より先に処理されます(新規の処理が約${Math.ceil(ids.length / 5)}分遅れる見込み)`);
   assertPaddleProvider();
 
   // 1) pendingへ戻す(pageResultsのキャッシュもクリア)。適格性の再確認と書き込みを、書類ごとの

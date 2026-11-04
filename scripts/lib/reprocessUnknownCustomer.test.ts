@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   exitCodeFor,
+  fitsInWaitWindow,
   isReprocessEligible,
   selectReprocessTargets,
   summarizeTransitions,
@@ -153,4 +154,16 @@ test('exitCodeFor: リセットの失敗・処理エラー・見つからない�
 
 test('exitCodeFor: 未完了と他の問題が重なれば2(未完了を優先して知らせる)', () => {
   assert.equal(exitCodeFor({ ...CLEAN, notFinished: 1, error: 1 }, 1), 2);
+});
+
+test('fitsInWaitWindow: 処理能力(1分5件の8割)で待機時間内に終わる件数なら真', () => {
+  // 40分 × 5件/分 × 0.8 = 160件
+  assert.equal(fitsInWaitWindow(160, 40), true);
+  assert.equal(fitsInWaitWindow(161, 40), false);
+  assert.equal(fitsInWaitWindow(0, 40), true);
+});
+
+test('fitsInWaitWindow: 待機時間が不正(0以下・NaN)なら偽(誤って通さない)', () => {
+  assert.equal(fitsInWaitWindow(1, 0), false);
+  assert.equal(fitsInWaitWindow(1, Number.NaN), false);
 });

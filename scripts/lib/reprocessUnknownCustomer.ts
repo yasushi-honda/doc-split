@@ -122,3 +122,17 @@ export function exitCodeFor(s: TransitionSummary, failedResets: number): number 
   if (failedResets > 0 || s.error > 0 || s.missing > 0) return 1;
   return 0;
 }
+
+/** processOCRの処理能力: 1分ごとに最大5件(BATCH_SIZE=5)。余裕を見て8割で見積もる */
+const OCR_QUEUE_PER_MINUTE = 5;
+const OCR_QUEUE_MARGIN = 0.8;
+
+/**
+ * count件の再処理が、待機時間(分)の内に終わる見込みか。再処理した書類は古いprocessedAtのまま
+ * pendingへ戻るため、新しく届く書類より先に処理される(その間、新規の処理が遅れる)。見込みを超える
+ * 件数を書き込んでしまうと、待機が切れて集計が不完全になるため、書き込みの前に判定する。
+ */
+export function fitsInWaitWindow(count: number, waitMinutes: number): boolean {
+  if (!Number.isFinite(waitMinutes) || waitMinutes <= 0) return false;
+  return count <= Math.floor(waitMinutes * OCR_QUEUE_PER_MINUTE * OCR_QUEUE_MARGIN);
+}
