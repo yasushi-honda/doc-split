@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   bucketDocumentType,
   bucketStatus,
+  isSelectionWaiting,
   summarizeDiagnosis,
   type DiagnosisDocInput,
 } from './unknownCustomerDiagnosis';
@@ -17,6 +18,7 @@ function doc(overrides: Partial<DiagnosisDocInput> = {}): DiagnosisDocInput {
     processedAtMs: D1,
     createdAtMs: D1,
     customerConfirmed: false,
+    needsManualCustomerSelection: null,
     verified: false,
     isSplitChild: true,
     ...overrides,
@@ -84,20 +86,50 @@ test('summarizeDiagnosis: 状態・書類種別・確認状態・分割の別に
   assert.equal(s.splitChildren, 7);
 });
 
-test('summarizeDiagnosis: 画面の「不明利用者・未判定・選択待ち」に当たる組み合わせ(processed・未判定・確認なし・未確認)を別に数える', () => {
+test('isSelectionWaiting: 画面のisCustomerConfirmedと同じ(customerConfirmed優先、無ければneedsManualCustomerSelection、どちらも無ければ確定済み)', () => {
+  assert.equal(isSelectionWaiting({ customerConfirmed: false, needsManualCustomerSelection: null }), true);
+  assert.equal(isSelectionWaiting({ customerConfirmed: true, needsManualCustomerSelection: true }), false); // customerConfirmedが優先
+  assert.equal(isSelectionWaiting({ customerConfirmed: null, needsManualCustomerSelection: true }), true);
+  assert.equal(isSelectionWaiting({ customerConfirmed: null, needsManualCustomerSelection: false }), false);
+  assert.equal(isSelectionWaiting({ customerConfirmed: null, needsManualCustomerSelection: null }), false); // 欠損は確定済み扱い(画面と同じ)
+});
+
+test('summarizeDiagnosis: 画面の「選択待ち」は確認済み・状態に依存しない(確認済みでも選択待ちに数える)', () => {
   const since = Date.parse('2026-11-01T00:00:00+09:00');
   const s = summarizeDiagnosis(
     [
-      doc(), // 画面の条件に一致
-      doc({ verified: true }), // 確認済み: 除く
-      doc({ customerConfirmed: true }), // 顧客確定済み: 除く
-      doc({ status: 'pending' }), // processedでない: 一致しない
-      doc({ docTypeBucket: 'empty' }), // 書類種別が空: 画面では「未判定」と出る可能性がある別集団
+      doc(), // 選択待ち・未確認・processed・未判定
+      doc({ verified: true }), // 確認済みでも、顧客未確定なら画面は選択待ち
+      doc({ status: 'pending' }), // processedでなくても選択待ち
+      doc({ customerConfirmed: true }), // 顧客確定済み: 選択待ちでない
+      doc({ customerConfirmed: null, needsManualCustomerSelection: true }), // 画面はneedsManualで選択待ち
+      doc({ customerConfirmed: null, needsManualCustomerSelection: null }), // 欠損: 画面は確定済み扱い
     ],
     since,
   );
-  assert.equal(s.screenPatternStrict, 1);
-  assert.equal(s.screenPatternDocTypeEmpty, 1);
+  assert.equal(s.selectionWaiting, 4);
+  assert.equal(s.waitingByVerified['true'], 1);
+  assert.equal(s.waitingByVerified['false'], 3);
+  assert.equal(s.waitingByStatus['processed'], 3);
+  assert.equal(s.waitingByStatus['pending'], 1);
+});
+
+test('summarizeDiagnosis: 選択待ちかつ書類種別「未判定」(画面の画像に当たる集団)と、取りこぼしの内訳を数える', () => {
+  const since = Date.parse('2026-11-01T00:00:00+09:00');
+  const s = summarizeDiagnosis(
+    [
+      doc(), // 選択待ち×未判定×processed×未確認: 前回S0の対象候補に相当
+      doc({ verified: true }), // 選択待ち×未判定×確認済み: 前回S0が除外していた
+      doc({ status: 'pending' }), // 選択待ち×未判定×pending
+      doc({ docTypeBucket: 'empty' }), // 選択待ち×書類種別が空欄
+      doc({ docTypeBucket: 'other' }), // 選択待ちだが書類種別あり: 画像の集団ではない
+      doc({ customerConfirmed: true }), // 選択待ちでない
+    ],
+    since,
+  );
+  assert.equal(s.selectionWaitingUndetermined, 3);
+  assert.equal(s.selectionWaitingDocTypeEmpty, 1);
+  assert.equal(s.previousS0Candidates, 1); // processed・未判定・選択待ち・人の確認なし
 });
 
 test('summarizeDiagnosis: 処理日時と作成日時のJST日付が食い違う件数と、日別(処理日時・作成日時)の件数を出す', () => {
@@ -119,6 +151,9 @@ test('summarizeDiagnosis: 出力のキーは日付・固定語彙のみで、自
     ...Object.keys(s.byStatus),
     ...Object.keys(s.byDocType),
     ...Object.keys(s.byCustomerConfirmed),
+    ...Object.keys(s.waitingByStatus),
+    ...Object.keys(s.waitingByVerified),
+    ...Object.keys(s.waitingByDocType),
     ...Object.keys(s.byProcessedDay),
     ...Object.keys(s.byCreatedDay),
   ];
@@ -131,6 +166,7 @@ test('summarizeDiagnosis: 出力のキーは日付・固定語彙のみで、自
 test('summarizeDiagnosis: 空入力は全てゼロ', () => {
   const s = summarizeDiagnosis([], Date.parse('2026-11-01T00:00:00+09:00'));
   assert.equal(s.inWindow, 0);
-  assert.equal(s.screenPatternStrict, 0);
+  assert.equal(s.selectionWaiting, 0);
+  assert.equal(s.selectionWaitingUndetermined, 0);
   assert.deepEqual(s.byStatus, {});
 });

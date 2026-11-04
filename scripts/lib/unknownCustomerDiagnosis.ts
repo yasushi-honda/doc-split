@@ -6,6 +6,10 @@
  * 食い違いの原因が「集計条件の取りこぼし」(処理日時が窓外、書類種別が空欄、状態がprocessedでない等)か、
  * 「その後の処理・削除」かを切り分けるため、条件を外した件数を出す。
  *
+ * 画面の「選択待ち」は、frontendのisCustomerConfirmed(customerConfirmedがあればその値、無ければ
+ * needsManualCustomerSelectionの反転、どちらも無ければ確定済み)で決まり、`verified`(人が確認済み)や
+ * `status`には依存しない。このため「選択待ち」を、確認済み・状態と切り離して数える(isSelectionWaiting)。
+ *
  * 出力のキーは日付と固定語彙のみ。書類種別・状態は値そのものではなく、固定のバケットにして出す
  * (自由文字列が公開ログに出ないようにする)。
  */
@@ -22,6 +26,8 @@ export interface DiagnosisDocInput {
   createdAtMs: number | null;
   /** customerConfirmedの真偽。欠損はnull */
   customerConfirmed: boolean | null;
+  /** needsManualCustomerSelectionの真偽。欠損はnull(customerConfirmedが無いデータの選択待ち判定に使う) */
+  needsManualCustomerSelection: boolean | null;
   verified: boolean;
   /** 分割で作られた子書類か(parentDocumentIdあり) */
   isSplitChild: boolean;
@@ -37,10 +43,17 @@ export interface DiagnosisSummary {
   byCustomerConfirmed: Record<string, number>;
   verified: number;
   splitChildren: number;
-  /** 画面の「不明利用者・未判定・選択待ち」に当たる組み合わせ: processed・未判定・顧客未確定・人の確認なし */
-  screenPatternStrict: number;
-  /** 上と同じだが書類種別が空欄(画面では「未判定」と出る可能性がある別集団) */
-  screenPatternDocTypeEmpty: number;
+  /** 画面の「選択待ち」(顧客未確定)に当たる件数。確認済み・状態に依存しない */
+  selectionWaiting: number;
+  waitingByStatus: Record<string, number>;
+  waitingByVerified: Record<string, number>;
+  waitingByDocType: Record<string, number>;
+  /** 選択待ちかつ書類種別が「未判定」(先方の画面に並んでいた集団)。確認済み・状態を問わない */
+  selectionWaitingUndetermined: number;
+  /** 選択待ちかつ書類種別が空欄(画面では「未判定」と出る可能性がある別集団) */
+  selectionWaitingDocTypeEmpty: number;
+  /** 前回の集計(count-undetermined-documents)の「対象候補」に相当: processed・未判定・選択待ち・人の確認なし */
+  previousS0Candidates: number;
   processedCreatedDayMismatch: number;
   byProcessedDay: Record<string, number>;
   byCreatedDay: Record<string, number>;
@@ -64,6 +77,13 @@ export function bucketStatus(value: unknown): string {
   return KNOWN_STATUSES.has(value) ? value : 'other';
 }
 
+/** 画面のisCustomerConfirmed(frontend/src/hooks/useProcessingHistory.ts)の反転と同じ。選択待ちならtrue */
+export function isSelectionWaiting(d: { customerConfirmed: boolean | null; needsManualCustomerSelection: boolean | null }): boolean {
+  if (d.customerConfirmed !== null) return !d.customerConfirmed;
+  if (d.needsManualCustomerSelection !== null) return d.needsManualCustomerSelection;
+  return false; // どちらも欠損は確定済み扱い(画面と同じ)
+}
+
 function increment(map: Record<string, number>, key: string): void {
   map[key] = (map[key] ?? 0) + 1;
 }
@@ -78,8 +98,13 @@ export function summarizeDiagnosis(docs: DiagnosisDocInput[], sinceMs: number): 
     byCustomerConfirmed: {},
     verified: 0,
     splitChildren: 0,
-    screenPatternStrict: 0,
-    screenPatternDocTypeEmpty: 0,
+    selectionWaiting: 0,
+    waitingByStatus: {},
+    waitingByVerified: {},
+    waitingByDocType: {},
+    selectionWaitingUndetermined: 0,
+    selectionWaitingDocTypeEmpty: 0,
+    previousS0Candidates: 0,
     processedCreatedDayMismatch: 0,
     byProcessedDay: {},
     byCreatedDay: {},
@@ -102,9 +127,17 @@ export function summarizeDiagnosis(docs: DiagnosisDocInput[], sinceMs: number): 
     if (d.verified) s.verified += 1;
     if (d.isSplitChild) s.splitChildren += 1;
 
-    const unconfirmed = d.customerConfirmed !== true && !d.verified && d.status === 'processed';
-    if (unconfirmed && d.docTypeBucket === 'undetermined') s.screenPatternStrict += 1;
-    if (unconfirmed && d.docTypeBucket === 'empty') s.screenPatternDocTypeEmpty += 1;
+    if (isSelectionWaiting(d)) {
+      s.selectionWaiting += 1;
+      increment(s.waitingByStatus, d.status);
+      increment(s.waitingByVerified, String(d.verified));
+      increment(s.waitingByDocType, d.docTypeBucket);
+      if (d.docTypeBucket === 'undetermined') {
+        s.selectionWaitingUndetermined += 1;
+        if (d.status === 'processed' && !d.verified) s.previousS0Candidates += 1;
+      }
+      if (d.docTypeBucket === 'empty') s.selectionWaitingDocTypeEmpty += 1;
+    }
 
     const pDay = d.processedAtMs === null ? 'none' : jstDateKey(d.processedAtMs);
     const cDay = d.createdAtMs === null ? 'none' : jstDateKey(d.createdAtMs);
