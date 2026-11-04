@@ -70,6 +70,8 @@ on:
           - inspect-ocr-volume-stats
           - inspect-ocr-volume-stats --days 90
           - inspect-ocr-volume-stats --days 90 --sample-limit 20000
+          - count-undetermined-documents --since 2026-11-01
+          - count-undetermined-documents --since 2026-10-01
           - delete-office-master --dry-run
           - delete-office-master --execute
           - reset-documents-by-office --dry-run
@@ -2601,6 +2603,13 @@ jobs:
               STORAGE_BUCKET="$STORAGE_BUCKET" \
               node "scripts/${SCRIPT_NAME}.js" \
                 --out "${GITHUB_WORKSPACE}/scripts/audit-session61-parent-provenance-output.json"
+          elif [ "$SCRIPT_NAME" = "count-undetermined-documents" ]; then
+            # ADR-0031: 書類種別「未判定」の件数を日別・ページ数帯・MIME別に集計する(read-only、件数のみ)。
+            # 出力は公開ログに載るため、書類名・利用者名・本文は取得も出力もしない。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node count-undetermined-documents.ts $SCRIPT_ARGS
           else
             NODE_PATH=./functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
