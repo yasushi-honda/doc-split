@@ -136,7 +136,7 @@ test('summarizeTransitions: 再処理したIDだけを渡せば、スキップ�
   assert.equal(s.improved, 1);
 });
 
-const CLEAN = { total: 3, notFinished: 0, error: 0, missing: 0, customerResolved: 0, docTypeResolved: 0, improved: 0, unchanged: 3, worsened: 0 };
+const CLEAN = { total: 3, notFinished: 0, error: 0, missing: 0, customerResolved: 0, customerLost: 0, docTypeResolved: 0, improved: 0, unchanged: 3, worsened: 0 };
 
 test('exitCodeFor: すべて完了していれば0', () => {
   assert.equal(exitCodeFor(CLEAN, 0), 0);
@@ -210,4 +210,25 @@ test('summarizeTransitions: 再処理前から利用者が確定済みの書類�
   assert.equal(s.customerResolved, 1);
   assert.equal(s.improved, 1);
   assert.equal(s.unchanged, 1);
+});
+
+test('summarizeTransitions: 元は利用者が確定済みだった書類が、再処理で不明に戻ったら customerLost に数える', () => {
+  const before = new Map<string, BeforeState>([
+    ['lost', B('undetermined', false)],
+    ['lost-and-typed', B('undetermined', false)],
+    ['kept', B('undetermined', false)],
+  ]);
+  const after = new Map<string, AfterState>([
+    ['lost', A({ customerUnknown: true })], // 利用者を失った(書類種別は未判定のまま)
+    ['lost-and-typed', A({ customerUnknown: true, docTypeBucket: 'other' })], // 書類種別は判定できたが、利用者を失った
+    ['kept', A({ customerUnknown: false })],
+  ]);
+  const s = summarizeTransitions(before, after);
+  assert.equal(s.customerLost, 2);
+  assert.equal(s.improved, 1); // lost-and-typed は書類種別が解消(improved)。利用者を失った点は customerLost で別に見える
+  assert.equal(s.unchanged, 2);
+});
+
+test('exitCodeFor: 利用者を失った書類があれば1(副作用を、緑のジョブに埋もれさせない)', () => {
+  assert.equal(exitCodeFor({ ...CLEAN, customerLost: 1 }, 0), 1);
 });

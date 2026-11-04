@@ -302,11 +302,12 @@ async function main(): Promise<void> {
   console.log(`  改善(利用者または書類種別が解消): ${s.improved}件`);
   console.log(`    うち利用者が不明でなくなった: ${s.customerResolved}件`);
   console.log(`    うち書類種別が「未判定」でなくなった: ${s.docTypeResolved}件`);
+  console.log(`  利用者を失った(元は確定済み→不明に戻った): ${s.customerLost}件`);
   console.log(`  変化なし: ${s.unchanged}件`);
   console.log(`  悪化(判定済みだった書類種別が未判定に): ${s.worsened}件`);
   console.log(`  エラー: ${s.error}件 / 未完了: ${s.notFinished}件 / 見つからない: ${s.missing}件`);
   const code = exitCodeFor(s, failedResets);
-  if (code !== 0) console.log(`終了コード ${code}(2=未完了あり、1=リセット失敗・エラー・見つからない書類あり)`);
+  if (code !== 0) console.log(`終了コード ${code}(2=未完了あり、1=リセット失敗・エラー・見つからない書類・利用者を失った書類あり)`);
   process.exitCode = code;
 }
 
