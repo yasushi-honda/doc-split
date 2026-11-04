@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   bucketDocumentType,
   bucketStatus,
+  isCustomerSelectionWaiting,
   isSelectionWaiting,
   summarizeDiagnosis,
   type DiagnosisDocInput,
@@ -19,6 +20,7 @@ function doc(overrides: Partial<DiagnosisDocInput> = {}): DiagnosisDocInput {
     createdAtMs: D1,
     customerConfirmed: false,
     needsManualCustomerSelection: null,
+    officeUnconfirmed: false,
     verified: false,
     isSplitChild: true,
     ...overrides,
@@ -86,12 +88,19 @@ test('summarizeDiagnosis: 状態・書類種別・確認状態・分割の別に
   assert.equal(s.splitChildren, 7);
 });
 
-test('isSelectionWaiting: 画面のisCustomerConfirmedと同じ(customerConfirmed優先、無ければneedsManualCustomerSelection、どちらも無ければ確定済み)', () => {
-  assert.equal(isSelectionWaiting({ customerConfirmed: false, needsManualCustomerSelection: null }), true);
-  assert.equal(isSelectionWaiting({ customerConfirmed: true, needsManualCustomerSelection: true }), false); // customerConfirmedが優先
-  assert.equal(isSelectionWaiting({ customerConfirmed: null, needsManualCustomerSelection: true }), true);
-  assert.equal(isSelectionWaiting({ customerConfirmed: null, needsManualCustomerSelection: false }), false);
-  assert.equal(isSelectionWaiting({ customerConfirmed: null, needsManualCustomerSelection: null }), false); // 欠損は確定済み扱い(画面と同じ)
+test('isCustomerSelectionWaiting: 画面のisCustomerConfirmedの反転と同じ(customerConfirmed優先、無ければneedsManualCustomerSelection、どちらも無ければ確定済み)', () => {
+  assert.equal(isCustomerSelectionWaiting({ customerConfirmed: false, needsManualCustomerSelection: null }), true);
+  assert.equal(isCustomerSelectionWaiting({ customerConfirmed: true, needsManualCustomerSelection: true }), false); // customerConfirmedが優先
+  assert.equal(isCustomerSelectionWaiting({ customerConfirmed: null, needsManualCustomerSelection: true }), true);
+  assert.equal(isCustomerSelectionWaiting({ customerConfirmed: null, needsManualCustomerSelection: false }), false);
+  assert.equal(isCustomerSelectionWaiting({ customerConfirmed: null, needsManualCustomerSelection: null }), false); // 欠損は確定済み扱い(画面と同じ)
+});
+
+test('isSelectionWaiting: 顧客未確定、または事業所未確定(officeConfirmed=falseかつ候補あり)のどちらでも選択待ち(画面のneedsReviewと同じ。同姓同名はマスター照合が要るため含まない)', () => {
+  assert.equal(isSelectionWaiting({ customerConfirmed: true, needsManualCustomerSelection: null, officeUnconfirmed: false }), false);
+  assert.equal(isSelectionWaiting({ customerConfirmed: true, needsManualCustomerSelection: null, officeUnconfirmed: true }), true);
+  assert.equal(isSelectionWaiting({ customerConfirmed: null, needsManualCustomerSelection: null, officeUnconfirmed: true }), true); // 顧客フラグ欠損でも事業所未確定なら選択待ち
+  assert.equal(isSelectionWaiting({ customerConfirmed: false, needsManualCustomerSelection: null, officeUnconfirmed: false }), true);
 });
 
 test('summarizeDiagnosis: 画面の「選択待ち」は確認済み・状態に依存しない(確認済みでも選択待ちに数える)', () => {
@@ -118,18 +127,36 @@ test('summarizeDiagnosis: 選択待ちかつ書類種別「未判定」(画面�
   const since = Date.parse('2026-11-01T00:00:00+09:00');
   const s = summarizeDiagnosis(
     [
-      doc(), // 選択待ち×未判定×processed×未確認: 前回S0の対象候補に相当
+      doc(), // 選択待ち×未判定×processed×未確認
       doc({ verified: true }), // 選択待ち×未判定×確認済み: 前回S0が除外していた
       doc({ status: 'pending' }), // 選択待ち×未判定×pending
       doc({ docTypeBucket: 'empty' }), // 選択待ち×書類種別が空欄
       doc({ docTypeBucket: 'other' }), // 選択待ちだが書類種別あり: 画像の集団ではない
       doc({ customerConfirmed: true }), // 選択待ちでない
+      doc({ customerConfirmed: true, officeUnconfirmed: true }), // 事業所未確定で選択待ち×未判定
     ],
     since,
   );
-  assert.equal(s.selectionWaitingUndetermined, 3);
+  assert.equal(s.selectionWaitingUndetermined, 4);
   assert.equal(s.selectionWaitingDocTypeEmpty, 1);
-  assert.equal(s.previousS0Candidates, 1); // processed・未判定・選択待ち・人の確認なし
+  assert.equal(s.officeOnlySelectionWaiting, 1);
+});
+
+test('summarizeDiagnosis: 前回の集計(count-undetermined-documents)の条件を独立に数える(選択待ちに依存しない)', () => {
+  const since = Date.parse('2026-11-01T00:00:00+09:00');
+  const s = summarizeDiagnosis(
+    [
+      doc(), // processed・未判定・確認なし・処理日時あり: 数える
+      doc({ customerConfirmed: null, needsManualCustomerSelection: null }), // 顧客フラグ欠損でも数える(前回の条件は選択待ちを見ない)
+      doc({ customerConfirmed: true }), // 顧客確定済みでも数える(前回の条件は選択待ちを見ない)
+      doc({ verified: true }), // 確認済み: 数えない
+      doc({ status: 'pending' }), // processedでない: 数えない
+      doc({ docTypeBucket: 'empty' }), // 未判定でない: 数えない
+      doc({ processedAtMs: null, createdAtMs: D1 }), // 処理日時なし(前回はprocessedAtで絞るため対象外): 数えない
+    ],
+    since,
+  );
+  assert.equal(s.previousS0Candidates, 3);
 });
 
 test('summarizeDiagnosis: 処理日時と作成日時のJST日付が食い違う件数と、日別(処理日時・作成日時)の件数を出す', () => {

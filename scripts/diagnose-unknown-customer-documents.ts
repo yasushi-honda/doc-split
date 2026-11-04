@@ -48,7 +48,7 @@ const db = admin.firestore();
 
 /** 画面の「不明利用者」は、保存値'不明顧客'の表示(shared/customerIdentity.tsのformatCustomerNameForDisplay) */
 const STORED_UNKNOWN_CUSTOMER = '不明顧客';
-const FIELDS = ['status', 'documentType', 'processedAt', 'createdAt', 'customerConfirmed', 'needsManualCustomerSelection', 'verified', 'parentDocumentId'] as const;
+const FIELDS = ['status', 'documentType', 'processedAt', 'createdAt', 'customerConfirmed', 'needsManualCustomerSelection', 'officeConfirmed', 'officeCandidates', 'verified', 'parentDocumentId'] as const;
 const READ_LIMIT = 20000;
 
 function toMs(v: unknown): number | null {
@@ -85,6 +85,8 @@ async function main(): Promise<void> {
       customerConfirmed: typeof data.customerConfirmed === 'boolean' ? data.customerConfirmed : null,
       needsManualCustomerSelection:
         typeof data.needsManualCustomerSelection === 'boolean' ? data.needsManualCustomerSelection : null,
+      // 事業所未確定(画面の選択待ちに含まれる): officeConfirmed===falseかつ候補あり。候補の中身は読まず、件数だけ使う
+      officeUnconfirmed: data.officeConfirmed === false && Array.isArray(data.officeCandidates) && data.officeCandidates.length > 0,
       verified: data.verified === true,
       isSplitChild: typeof data.parentDocumentId === 'string' && data.parentDocumentId.length > 0,
     };
@@ -98,13 +100,14 @@ async function main(): Promise<void> {
   printMap('customerConfirmed', s.byCustomerConfirmed);
   console.log(`人が確認済み(verified): ${s.verified}件 / 分割で作られた書類: ${s.splitChildren}件`);
   console.log('');
-  console.log(`画面の「選択待ち」(顧客未確定。確認済み・状態に依存しない)に当たる書類: ${s.selectionWaiting}件`);
+  console.log(`画面の「選択待ち」(顧客未確定 または 事業所未確定。確認済み・状態に依存しない。同姓同名は含まない)に当たる書類: ${s.selectionWaiting}件`);
+  console.log(`  うち顧客は確定済みで事業所未確定のみ: ${s.officeOnlySelectionWaiting}件`);
   printMap('  選択待ち × 状態', s.waitingByStatus);
   printMap('  選択待ち × 人が確認済み(verified)', s.waitingByVerified);
   printMap('  選択待ち × 書類種別', s.waitingByDocType);
   console.log(`先方の画面に並んでいた集団(選択待ち かつ 書類種別が「未判定」。確認済み・状態を問わない): ${s.selectionWaitingUndetermined}件`);
   console.log(`同じだが書類種別が空欄(画面では「未判定」と出る可能性): ${s.selectionWaitingDocTypeEmpty}件`);
-  console.log(`(参考)前回の集計の「対象候補」に相当(processed・未判定・選択待ち・人の確認なし): ${s.previousS0Candidates}件`);
+  console.log(`(参考)前回の集計の条件(processed・未判定・人の確認なし・処理日時あり。選択待ちに依存しない): ${s.previousS0Candidates}件`);
   console.log(`処理日時と作成日時のJST日付が食い違う書類: ${s.processedCreatedDayMismatch}件`);
   console.log('');
   printMap('処理日時の日別(JST)', s.byProcessedDay);

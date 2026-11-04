@@ -6,9 +6,11 @@
  * 食い違いの原因が「集計条件の取りこぼし」(処理日時が窓外、書類種別が空欄、状態がprocessedでない等)か、
  * 「その後の処理・削除」かを切り分けるため、条件を外した件数を出す。
  *
- * 画面の「選択待ち」は、frontendのisCustomerConfirmed(customerConfirmedがあればその値、無ければ
- * needsManualCustomerSelectionの反転、どちらも無ければ確定済み)で決まり、`verified`(人が確認済み)や
- * `status`には依存しない。このため「選択待ち」を、確認済み・状態と切り離して数える(isSelectionWaiting)。
+ * 画面の「選択待ち」バッジは、顧客未確定(frontendのisCustomerConfirmedの反転: customerConfirmedがあれば
+ * その値、無ければneedsManualCustomerSelection、どちらも無ければ確定済み)、事業所未確定(officeConfirmedが
+ * falseかつofficeCandidatesあり)、同姓同名のいずれかで出る。`verified`(人が確認済み)や`status`には
+ * 依存しない。このため「選択待ち」を確認済み・状態と切り離して数える(isSelectionWaiting)。
+ * 同姓同名は顧客マスターとの照合が要るため、この診断には含めない(選択待ちの件数は、画面より少なく出うる)。
  *
  * 出力のキーは日付と固定語彙のみ。書類種別・状態は値そのものではなく、固定のバケットにして出す
  * (自由文字列が公開ログに出ないようにする)。
@@ -28,6 +30,8 @@ export interface DiagnosisDocInput {
   customerConfirmed: boolean | null;
   /** needsManualCustomerSelectionの真偽。欠損はnull(customerConfirmedが無いデータの選択待ち判定に使う) */
   needsManualCustomerSelection: boolean | null;
+  /** 事業所未確定(officeConfirmed===falseかつofficeCandidatesが1件以上)。画面の選択待ちに含まれる */
+  officeUnconfirmed: boolean;
   verified: boolean;
   /** 分割で作られた子書類か(parentDocumentIdあり) */
   isSplitChild: boolean;
@@ -52,7 +56,9 @@ export interface DiagnosisSummary {
   selectionWaitingUndetermined: number;
   /** 選択待ちかつ書類種別が空欄(画面では「未判定」と出る可能性がある別集団) */
   selectionWaitingDocTypeEmpty: number;
-  /** 前回の集計(count-undetermined-documents)の「対象候補」に相当: processed・未判定・選択待ち・人の確認なし */
+  /** 顧客は確定済みだが事業所未確定で選択待ちになっている件数(顧客だけを見ると取りこぼす集団) */
+  officeOnlySelectionWaiting: number;
+  /** 前回の集計(count-undetermined-documents)の条件を、選択待ちと独立に数えた件数: processed・未判定・人の確認なし・処理日時あり */
   previousS0Candidates: number;
   processedCreatedDayMismatch: number;
   byProcessedDay: Record<string, number>;
@@ -77,11 +83,23 @@ export function bucketStatus(value: unknown): string {
   return KNOWN_STATUSES.has(value) ? value : 'other';
 }
 
-/** 画面のisCustomerConfirmed(frontend/src/hooks/useProcessingHistory.ts)の反転と同じ。選択待ちならtrue */
-export function isSelectionWaiting(d: { customerConfirmed: boolean | null; needsManualCustomerSelection: boolean | null }): boolean {
+/** 顧客が選択待ちか。画面のisCustomerConfirmed(frontend/src/hooks/useProcessingHistory.ts)の反転と同じ */
+export function isCustomerSelectionWaiting(d: {
+  customerConfirmed: boolean | null;
+  needsManualCustomerSelection: boolean | null;
+}): boolean {
   if (d.customerConfirmed !== null) return !d.customerConfirmed;
   if (d.needsManualCustomerSelection !== null) return d.needsManualCustomerSelection;
   return false; // どちらも欠損は確定済み扱い(画面と同じ)
+}
+
+/** 画面の「選択待ち」バッジ(顧客未確定 または 事業所未確定)。同姓同名は含まない */
+export function isSelectionWaiting(d: {
+  customerConfirmed: boolean | null;
+  needsManualCustomerSelection: boolean | null;
+  officeUnconfirmed: boolean;
+}): boolean {
+  return isCustomerSelectionWaiting(d) || d.officeUnconfirmed;
 }
 
 function increment(map: Record<string, number>, key: string): void {
@@ -104,6 +122,7 @@ export function summarizeDiagnosis(docs: DiagnosisDocInput[], sinceMs: number): 
     waitingByDocType: {},
     selectionWaitingUndetermined: 0,
     selectionWaitingDocTypeEmpty: 0,
+    officeOnlySelectionWaiting: 0,
     previousS0Candidates: 0,
     processedCreatedDayMismatch: 0,
     byProcessedDay: {},
@@ -132,11 +151,13 @@ export function summarizeDiagnosis(docs: DiagnosisDocInput[], sinceMs: number): 
       increment(s.waitingByStatus, d.status);
       increment(s.waitingByVerified, String(d.verified));
       increment(s.waitingByDocType, d.docTypeBucket);
-      if (d.docTypeBucket === 'undetermined') {
-        s.selectionWaitingUndetermined += 1;
-        if (d.status === 'processed' && !d.verified) s.previousS0Candidates += 1;
-      }
+      if (d.docTypeBucket === 'undetermined') s.selectionWaitingUndetermined += 1;
       if (d.docTypeBucket === 'empty') s.selectionWaitingDocTypeEmpty += 1;
+      if (!isCustomerSelectionWaiting(d) && d.officeUnconfirmed) s.officeOnlySelectionWaiting += 1;
+    }
+    // 前回の集計の条件(選択待ちに依存しない): processedAtで絞るため、処理日時なしは対象外
+    if (d.status === 'processed' && d.docTypeBucket === 'undetermined' && !d.verified && d.processedAtMs !== null) {
+      s.previousS0Candidates += 1;
     }
 
     const pDay = d.processedAtMs === null ? 'none' : jstDateKey(d.processedAtMs);
