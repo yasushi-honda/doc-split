@@ -15,7 +15,7 @@ const SINCE = Date.parse('2026-10-31T15:00:00Z'); // JST 2026-11-01 0時
 const IN = SINCE + 3_600_000;
 
 function cand(id: string, o: Partial<TargetCandidate> = {}): TargetCandidate {
-  return { id, status: 'processed', verified: false, processedAtMs: IN, customerUnknown: true, ...o };
+  return { id, status: 'processed', verified: false, processedAtMs: IN, customerUnknown: true, docTypeBucket: 'undetermined', ...o };
 }
 
 test('selectReprocessTargets: 窓の内側・processed・確認なし・利用者不明だけを選ぶ', () => {
@@ -52,7 +52,7 @@ test('selectReprocessTargets: limitが0以下・NaNなら全件(誤って0件に
   assert.deepEqual(selectReprocessTargets(docs, SINCE, Number.NaN), ['a', 'b']);
 });
 
-const B = (docTypeBucket: BeforeState['docTypeBucket']): BeforeState => ({ docTypeBucket });
+const B = (docTypeBucket: BeforeState['docTypeBucket'], customerUnknown = true): BeforeState => ({ docTypeBucket, customerUnknown });
 const A = (o: Partial<AfterState> = {}): AfterState => ({ status: 'processed', customerUnknown: true, docTypeBucket: 'undetermined', ...o });
 
 test('summarizeTransitions: 利用者・書類種別の改善/変化なし/悪化を数える', () => {
@@ -114,11 +114,11 @@ test('summarizeTransitions: 対象が0件でも崩れない', () => {
 });
 
 test('isReprocessEligible: processed・確認なし・利用者不明のときだけ真(トランザクション内の再確認に使う)', () => {
-  assert.equal(isReprocessEligible({ status: 'processed', verified: false, customerUnknown: true }), true);
-  assert.equal(isReprocessEligible({ status: 'processed', verified: true, customerUnknown: true }), false); // 取得後に確認済みになった
-  assert.equal(isReprocessEligible({ status: 'processed', verified: false, customerUnknown: false }), false); // 取得後に利用者が確定した
-  assert.equal(isReprocessEligible({ status: 'pending', verified: false, customerUnknown: true }), false);
-  assert.equal(isReprocessEligible({ status: 'error', verified: false, customerUnknown: true }), false);
+  assert.equal(isReprocessEligible({ status: 'processed', verified: false, customerUnknown: true, docTypeBucket: 'other' }), true);
+  assert.equal(isReprocessEligible({ status: 'processed', verified: true, customerUnknown: true, docTypeBucket: 'other' }), false); // 取得後に確認済みになった
+  assert.equal(isReprocessEligible({ status: 'processed', verified: false, customerUnknown: false, docTypeBucket: 'other' }), false); // 取得後に利用者が確定した
+  assert.equal(isReprocessEligible({ status: 'pending', verified: false, customerUnknown: true, docTypeBucket: 'other' }), false);
+  assert.equal(isReprocessEligible({ status: 'error', verified: false, customerUnknown: true, docTypeBucket: 'other' }), false);
 });
 
 test('summarizeTransitions: 再処理したIDだけを渡せば、スキップした書類は集計に入らない', () => {
@@ -166,4 +166,48 @@ test('fitsInWaitWindow: 処理能力(1分5件の8割)で待機時間内に終わ
 test('fitsInWaitWindow: 待機時間が不正(0以下・NaN)なら偽(誤って通さない)', () => {
   assert.equal(fitsInWaitWindow(1, 0), false);
   assert.equal(fitsInWaitWindow(1, Number.NaN), false);
+});
+
+test('selectReprocessTargets(undetermined): 書類種別が未判定・processed・確認なしを選ぶ。利用者が確定済みの書類も含む', () => {
+  const ids = selectReprocessTargets(
+    [
+      cand('known-undet', { customerUnknown: false }), // 利用者は確定済み・未判定 → 対象
+      cand('unknown-undet'), // 利用者不明・未判定 → 対象
+      cand('known-other', { customerUnknown: false, docTypeBucket: 'other' }), // 判定済み → 対象外
+      cand('verified', { verified: true, customerUnknown: false }), // 確認済み → 対象外
+      cand('split', { status: 'split', customerUnknown: false }),
+      cand('old', { processedAtMs: SINCE - 1, customerUnknown: false }),
+    ],
+    SINCE,
+    undefined,
+    'undetermined',
+  );
+  assert.deepEqual(ids, ['known-undet', 'unknown-undet']);
+});
+
+test('selectReprocessTargets(既定=unknown-customer): 書類種別が判定済みでも利用者不明なら対象(従来どおり)', () => {
+  const ids = selectReprocessTargets([cand('a', { docTypeBucket: 'other' }), cand('b', { customerUnknown: false })], SINCE);
+  assert.deepEqual(ids, ['a']);
+});
+
+test('isReprocessEligible(undetermined): トランザクション内の再確認で、判定済みになった書類は偽', () => {
+  const base = { status: 'processed', verified: false, customerUnknown: false };
+  assert.equal(isReprocessEligible({ ...base, docTypeBucket: 'undetermined' }, 'undetermined'), true);
+  assert.equal(isReprocessEligible({ ...base, docTypeBucket: 'other' }, 'undetermined'), false);
+  assert.equal(isReprocessEligible({ ...base, docTypeBucket: 'undetermined', verified: true }, 'undetermined'), false);
+});
+
+test('summarizeTransitions: 再処理前から利用者が確定済みの書類は「利用者が不明でなくなった」に数えない', () => {
+  const before = new Map<string, BeforeState>([
+    ['known', B('undetermined', false)], // 利用者は元から確定
+    ['unknown', B('undetermined', true)],
+  ]);
+  const after = new Map<string, AfterState>([
+    ['known', A({ customerUnknown: false })], // 未判定のまま、利用者も確定のまま → 変化なし
+    ['unknown', A({ customerUnknown: false })], // 利用者が不明でなくなった
+  ]);
+  const s = summarizeTransitions(before, after);
+  assert.equal(s.customerResolved, 1);
+  assert.equal(s.improved, 1);
+  assert.equal(s.unchanged, 1);
 });

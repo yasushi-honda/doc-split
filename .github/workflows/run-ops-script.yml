@@ -81,6 +81,10 @@ on:
           - reprocess-unknown-customer-documents --since 2026-10-01 --limit 2 --execute
           - reprocess-unknown-customer-documents --since 2026-11-01 --limit 5 --execute
           - reprocess-unknown-customer-documents --since 2026-11-01 --all --execute
+          - reprocess-unknown-customer-documents --since 2026-11-01 --mode undetermined
+          - reprocess-unknown-customer-documents --since 2026-11-01 --mode undetermined --all --execute
+          - reprocess-unknown-customer-documents --since 2026-10-01 --mode undetermined
+          - reprocess-unknown-customer-documents --since 2026-10-01 --mode undetermined --limit 2 --execute
           - delete-office-master --dry-run
           - delete-office-master --execute
           - reset-documents-by-office --dry-run

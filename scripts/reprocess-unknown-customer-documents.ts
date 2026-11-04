@@ -6,7 +6,9 @@
  * 解消する書類がどれだけあるかを、書類名・利用者名・ID・本文を出さずに測る。GitHub Actionsのログは
  * 公開されるため、出力は件数のみ。
  *
- * 対象: status=processed・人の確認なし(verified!==true)・利用者不明・処理日時 >= --since(JST 0時)。
+ * 対象(--mode で選ぶ。共通: status=processed・人の確認なし・処理日時 >= --since(JST 0時)):
+ *   unknown-customer(既定): 利用者不明(customerName='不明顧客'相当)
+ *   undetermined: 書類種別が「未判定」(利用者が確定済みの書類も含む)
  * 人が確認済みの書類は触らない(確認の結果が再処理で消える可能性があるため)。
  *
  * 動作: 再処理の前に各書類の書類種別を控え、statusをpendingへ戻し(pageResultsのキャッシュもクリア。
@@ -21,6 +23,7 @@
  *   reprocess-unknown-customer-documents --since 2026-11-01                     (dry-run: 対象件数のみ)
  *   reprocess-unknown-customer-documents --since 2026-11-01 --limit 5 --execute  (カナリア)
  *   reprocess-unknown-customer-documents --since 2026-11-01 --all --execute      (全件)
+ *   reprocess-unknown-customer-documents --since 2026-11-01 --mode undetermined   (書類種別が未判定の書類。dry-run)
  */
 
 import { execFileSync } from 'node:child_process';
@@ -35,6 +38,7 @@ import {
   summarizeTransitions,
   type AfterState,
   type BeforeState,
+  type ReprocessMode,
   type TargetCandidate,
 } from './lib/reprocessUnknownCustomer';
 
@@ -58,6 +62,12 @@ if (!since || sinceMs === null) {
 const sinceStartMs: number = sinceMs;
 const execute = process.argv.includes('--execute');
 const all = process.argv.includes('--all');
+const modeArg = getArg('--mode') ?? 'unknown-customer';
+if (modeArg !== 'unknown-customer' && modeArg !== 'undetermined') {
+  console.error('--mode は unknown-customer または undetermined を指定してください');
+  process.exit(1);
+}
+const mode: ReprocessMode = modeArg;
 const limitArg = getArg('--limit');
 const limit = limitArg === undefined ? undefined : Number(limitArg);
 if (limitArg !== undefined && !(Number.isInteger(limit) && (limit as number) > 0)) {
@@ -126,10 +136,14 @@ function assertPaddleProvider(): void {
 }
 
 async function main(): Promise<void> {
-  console.log(`対象: customerName='不明顧客'・processed・人の確認なし・処理日時(JST) >= ${since} 0時`);
+  console.log(
+    mode === 'undetermined'
+      ? `対象: 書類種別が「未判定」・processed・人の確認なし・処理日時(JST) >= ${since} 0時(利用者が確定済みの書類も含む)`
+      : `対象: customerName='不明顧客'・processed・人の確認なし・処理日時(JST) >= ${since} 0時`,
+  );
   const snap = await db
     .collection('documents')
-    .where('customerName', '==', STORED_UNKNOWN_CUSTOMER)
+    .where(mode === 'undetermined' ? 'documentType' : 'customerName', '==', mode === 'undetermined' ? '未判定' : STORED_UNKNOWN_CUSTOMER)
     .select(...FIELDS)
     .limit(READ_LIMIT)
     .get();
@@ -148,19 +162,21 @@ async function main(): Promise<void> {
       verified: data.verified === true,
       processedAtMs: toMs(data.processedAt),
       customerUnknown: isCustomerUnknown(data.customerName),
+      docTypeBucket: bucketDocumentType(data.documentType),
     });
-    typeById.set(d.id, { docTypeBucket: bucketDocumentType(data.documentType) });
+    typeById.set(d.id, { docTypeBucket: bucketDocumentType(data.documentType), customerUnknown: isCustomerUnknown(data.customerName) });
   }
-  const ids = selectReprocessTargets(candidates, sinceStartMs, all ? undefined : limit);
-  const allIds = selectReprocessTargets(candidates, sinceStartMs);
-  console.log(`customerName='不明顧客'の書類(全期間): ${snap.size}件`);
-  console.log(`再処理の対象(窓の内側・processed・確認なし・利用者不明): ${allIds.length}件`);
+  const ids = selectReprocessTargets(candidates, sinceStartMs, all ? undefined : limit, mode);
+  const allIds = selectReprocessTargets(candidates, sinceStartMs, undefined, mode);
+  console.log(`${mode === 'undetermined' ? '書類種別が「未判定」' : "customerName='不明顧客'"}の書類(全期間): ${snap.size}件`);
+  console.log(`再処理の対象(窓の内側・processed・確認なし・${mode === 'undetermined' ? '未判定' : '利用者不明'}): ${allIds.length}件`);
   console.log(`今回の実行対象: ${ids.length}件${all ? '(全件)' : limit !== undefined ? `(--limit ${limit})` : ''}`);
   const before = new Map<string, BeforeState>();
   for (const id of ids) before.set(id, typeById.get(id) as BeforeState);
   const beforeTypes: Record<string, number> = {};
   for (const b of before.values()) beforeTypes[b.docTypeBucket] = (beforeTypes[b.docTypeBucket] ?? 0) + 1;
   console.log(`  書類種別(再処理前): ${Object.entries(beforeTypes).map(([k, v]) => `${k}=${v}`).join(', ') || '(なし)'}`);
+  console.log(`  うち利用者が不明(再処理前): ${[...before.values()].filter((b) => b.customerUnknown).length}件`);
 
   if (!execute) {
     console.log('\nDRY RUN: 書込みは実行しません。--execute と --limit N または --all で実行してください。');
@@ -195,7 +211,15 @@ async function main(): Promise<void> {
       const data = docSnap.data();
       if (
         !data ||
-        !isReprocessEligible({ status: bucketStatus(data.status), verified: data.verified === true, customerUnknown: isCustomerUnknown(data.customerName) })
+        !isReprocessEligible(
+          {
+            status: bucketStatus(data.status),
+            verified: data.verified === true,
+            customerUnknown: isCustomerUnknown(data.customerName),
+            docTypeBucket: bucketDocumentType(data.documentType),
+          },
+          mode,
+        )
       ) {
         return false;
       }
