@@ -3,9 +3,11 @@ import { test } from 'node:test';
 import {
   bucketDocumentType,
   bucketStatus,
+  dailyRateRows,
   isCustomerSelectionWaiting,
   isSelectionWaiting,
   summarizeDiagnosis,
+  unknownProcessedByDay,
   type DiagnosisDocInput,
 } from './unknownCustomerDiagnosis';
 
@@ -196,4 +198,63 @@ test('summarizeDiagnosis: 空入力は全てゼロ', () => {
   assert.equal(s.selectionWaiting, 0);
   assert.equal(s.selectionWaitingUndetermined, 0);
   assert.deepEqual(s.byStatus, {});
+});
+
+test('summarizeDiagnosis: 選択待ち×未判定の内訳(確認済みか・状態)を数える', () => {
+  const since = Date.parse('2026-11-01T00:00:00+09:00');
+  const s = summarizeDiagnosis(
+    [
+      doc(), // 選択待ち×未判定×processed×確認なし
+      doc({ verified: true }), // ×確認済み
+      doc({ verified: true, status: 'split' }), // ×確認済み×split
+      doc({ status: 'pending' }),
+      doc({ docTypeBucket: 'other' }), // 未判定でない: 内訳に入れない
+      doc({ customerConfirmed: true }), // 選択待ちでない: 内訳に入れない
+    ],
+    since,
+  );
+  assert.equal(s.selectionWaitingUndetermined, 4);
+  assert.deepEqual(s.waitingUndeterminedByVerified, { false: 2, true: 2 });
+  assert.deepEqual(s.waitingUndeterminedByStatus, { pending: 1, processed: 2, split: 1 });
+});
+
+test('dailyRateRows: 日別に processed全体・利用者不明・率を出す。分母0は「-」、日付は昇順', () => {
+  const rows = dailyRateRows(
+    { '2026-11-02': 200, '2026-11-01': 100, '2026-11-03': 0 },
+    { '2026-11-01': 10, '2026-11-02': 50 },
+  );
+  assert.deepEqual(rows.map((r) => r.day), ['2026-11-01', '2026-11-02', '2026-11-03']);
+  assert.deepEqual(rows[0], { day: '2026-11-01', total: 100, unknown: 10, rate: '10.0%' });
+  assert.deepEqual(rows[1], { day: '2026-11-02', total: 200, unknown: 50, rate: '25.0%' });
+  assert.deepEqual(rows[2], { day: '2026-11-03', total: 0, unknown: 0, rate: '-' });
+});
+
+test('dailyRateRows: 利用者不明だけある日(全体の集計に無い日)も出す。keyは日付のみ(noneは除く)', () => {
+  const rows = dailyRateRows({ '2026-11-01': 10 }, { '2026-11-01': 1, '2026-11-02': 2, none: 3 });
+  assert.deepEqual(rows.map((r) => r.day), ['2026-11-01', '2026-11-02']);
+  assert.equal(rows[1].rate, '-');
+});
+
+test('unknownProcessedByDay: processedで処理日時がある書類だけを、窓(--since)の内側に限ってJST日別に数える(窓の外は除く)', () => {
+  const since = Date.parse('2026-11-01T00:00:00+09:00');
+  const before = Date.parse('2026-10-31T14:59:59Z'); // JST 2026-10-31 23:59:59(窓の外)
+  const edge = Date.parse('2026-10-31T15:00:00Z'); // JST 2026-11-01 00:00:00(窓の内側、ちょうど)
+  const r = unknownProcessedByDay(
+    [
+      doc({ processedAtMs: before }), // 窓の外: 数えない
+      doc({ processedAtMs: edge }), // 窓の境界: 数える
+      doc({ processedAtMs: D1 }), // 11/4: 数える
+      doc({ processedAtMs: D1, status: 'split' }), // processedでない: 数えない
+      doc({ processedAtMs: null }), // 処理日時なし: 数えない
+    ],
+    since,
+  );
+  assert.deepEqual(r, { '2026-11-01': 1, '2026-11-04': 1 });
+});
+
+test('unknownProcessedByDay: 窓の外だけなら空。dailyRateRowsに渡しても、窓より前の日付の行が出ない', () => {
+  const since = Date.parse('2026-11-01T00:00:00+09:00');
+  const r = unknownProcessedByDay([doc({ processedAtMs: D0 })], since); // D0=10/20
+  assert.deepEqual(r, {});
+  assert.deepEqual(dailyRateRows({ '2026-11-01': 5 }, r).map((x) => x.day), ['2026-11-01']);
 });

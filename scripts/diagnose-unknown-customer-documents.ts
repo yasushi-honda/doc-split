@@ -16,11 +16,13 @@
  */
 
 import * as admin from 'firebase-admin';
-import { parseSinceArg } from './lib/undeterminedSummary';
+import { jstDayRanges, parseSinceArg } from './lib/undeterminedSummary';
 import {
   bucketDocumentType,
   bucketStatus,
+  dailyRateRows,
   summarizeDiagnosis,
+  unknownProcessedByDay,
   type DiagnosisDocInput,
 } from './lib/unknownCustomerDiagnosis';
 
@@ -106,12 +108,46 @@ async function main(): Promise<void> {
   printMap('  選択待ち × 人が確認済み(verified)', s.waitingByVerified);
   printMap('  選択待ち × 書類種別', s.waitingByDocType);
   console.log(`先方の画面に並んでいた集団(選択待ち かつ 書類種別が「未判定」。確認済み・状態を問わない): ${s.selectionWaitingUndetermined}件`);
+  printMap('  うち未判定 × 人が確認済み(verified)', s.waitingUndeterminedByVerified);
+  printMap('  うち未判定 × 状態', s.waitingUndeterminedByStatus);
   console.log(`同じだが書類種別が空欄(画面では「未判定」と出る可能性): ${s.selectionWaitingDocTypeEmpty}件`);
   console.log(`(参考)前回の集計の条件(processed・未判定・人の確認なし・処理日時あり。選択待ちに依存しない): ${s.previousS0Candidates}件`);
   console.log(`処理日時と作成日時のJST日付が食い違う書類: ${s.processedCreatedDayMismatch}件`);
   console.log('');
   printMap('処理日時の日別(JST)', s.byProcessedDay);
   printMap('作成日時の日別(JST)', s.byCreatedDay);
+
+  // 利用者不明の率(日別)。分母は、その日に処理された書類(status=processed)の全体件数
+  const totalByDay: Record<string, number> = {};
+  for (const range of jstDayRanges(sinceStartMs, Date.now())) {
+    const countSnap = await db
+      .collection('documents')
+      .where('status', '==', 'processed')
+      .where('processedAt', '>=', admin.firestore.Timestamp.fromMillis(range.startMs))
+      .where('processedAt', '<', admin.firestore.Timestamp.fromMillis(range.endMs))
+      .count()
+      .get();
+    totalByDay[range.day] = countSnap.data().count;
+  }
+  const unknownByDay = unknownProcessedByDay(docs, sinceStartMs);
+  console.log('');
+  console.log('利用者不明の率(日別、JST。分母=その日に処理されたprocessedの全体、分子=うち利用者不明のprocessed)');
+  console.log('日(JST) | processed全体 | 利用者不明 | 率');
+  const rows = dailyRateRows(totalByDay, unknownByDay);
+  for (const r of rows) console.log(`${r.day} | ${r.total} | ${r.unknown} | ${r.rate}`);
+  // 月別の合計(10月・11月の比較用)
+  const byMonth: Record<string, { total: number; unknown: number }> = {};
+  for (const r of rows) {
+    const m = r.day.slice(0, 7);
+    const cur = (byMonth[m] ??= { total: 0, unknown: 0 });
+    cur.total += r.total;
+    cur.unknown += r.unknown;
+  }
+  console.log('');
+  console.log('月別(窓の範囲のみ。月の途中から始まる場合は一部の期間)');
+  for (const [m, v] of Object.entries(byMonth).sort(([a], [b]) => a.localeCompare(b))) {
+    console.log(`${m} | processed全体 ${v.total} | 利用者不明 ${v.unknown} | ${v.total > 0 ? ((v.unknown / v.total) * 100).toFixed(1) + '%' : '-'}`);
+  }
 }
 
 main()

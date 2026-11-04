@@ -54,6 +54,9 @@ export interface DiagnosisSummary {
   waitingByDocType: Record<string, number>;
   /** 選択待ちかつ書類種別が「未判定」(先方の画面に並んでいた集団)。確認済み・状態を問わない */
   selectionWaitingUndetermined: number;
+  /** 選択待ち×未判定の内訳: 人が確認済みか(true/false)・状態 */
+  waitingUndeterminedByVerified: Record<string, number>;
+  waitingUndeterminedByStatus: Record<string, number>;
   /** 選択待ちかつ書類種別が空欄(画面では「未判定」と出る可能性がある別集団) */
   selectionWaitingDocTypeEmpty: number;
   /** 顧客は確定済みだが事業所未確定で選択待ちになっている件数(顧客だけを見ると取りこぼす集団) */
@@ -121,6 +124,8 @@ export function summarizeDiagnosis(docs: DiagnosisDocInput[], sinceMs: number): 
     waitingByVerified: {},
     waitingByDocType: {},
     selectionWaitingUndetermined: 0,
+    waitingUndeterminedByVerified: {},
+    waitingUndeterminedByStatus: {},
     selectionWaitingDocTypeEmpty: 0,
     officeOnlySelectionWaiting: 0,
     previousS0Candidates: 0,
@@ -151,7 +156,11 @@ export function summarizeDiagnosis(docs: DiagnosisDocInput[], sinceMs: number): 
       increment(s.waitingByStatus, d.status);
       increment(s.waitingByVerified, String(d.verified));
       increment(s.waitingByDocType, d.docTypeBucket);
-      if (d.docTypeBucket === 'undetermined') s.selectionWaitingUndetermined += 1;
+      if (d.docTypeBucket === 'undetermined') {
+        s.selectionWaitingUndetermined += 1;
+        increment(s.waitingUndeterminedByVerified, String(d.verified));
+        increment(s.waitingUndeterminedByStatus, d.status);
+      }
       if (d.docTypeBucket === 'empty') s.selectionWaitingDocTypeEmpty += 1;
       if (!isCustomerSelectionWaiting(d) && d.officeUnconfirmed) s.officeOnlySelectionWaiting += 1;
     }
@@ -167,4 +176,42 @@ export function summarizeDiagnosis(docs: DiagnosisDocInput[], sinceMs: number): 
     if (pDay !== cDay) s.processedCreatedDayMismatch += 1;
   }
   return s;
+}
+
+export interface DailyRateRow {
+  day: string;
+  /** その日に処理された書類(processed)の全体件数 */
+  total: number;
+  /** うち利用者不明(窓の中のbyProcessedDay) */
+  unknown: number;
+  /** 利用者不明の率。分母0は'-' */
+  rate: string;
+}
+
+/**
+ * 日別の「processed全体」と「利用者不明」から、利用者不明の率の行を作る。日付(YYYY-MM-DD)のみを対象にし、
+ * 日付なし('none')は除く。日付の昇順。利用者不明だけある日(全体の集計に無い日)も出す。
+ */
+export function dailyRateRows(totalByDay: Record<string, number>, unknownByDay: Record<string, number>): DailyRateRow[] {
+  const days = new Set<string>();
+  for (const k of [...Object.keys(totalByDay), ...Object.keys(unknownByDay)]) if (/^\d{4}-\d{2}-\d{2}$/.test(k)) days.add(k);
+  return [...days].sort().map((day) => {
+    const total = totalByDay[day] ?? 0;
+    const unknown = unknownByDay[day] ?? 0;
+    return { day, total, unknown, rate: total > 0 ? `${((unknown / total) * 100).toFixed(1)}%` : '-' };
+  });
+}
+
+/**
+ * 利用者不明のprocessed書類を、窓(sinceMs以降)の内側に限って、処理日時のJST日別に数える。
+ * 利用者不明の率の分子に使う。分母(その日のprocessed全体)は窓の内側だけを数えるため、分子も同じ窓に
+ * そろえる(窓の外の書類が混ざると、月別の率が過大になり、窓より前の日付に分母0の行が出る)。
+ */
+export function unknownProcessedByDay(docs: DiagnosisDocInput[], sinceMs: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const d of docs) {
+    if (d.status !== 'processed' || d.processedAtMs === null || d.processedAtMs < sinceMs) continue;
+    increment(out, jstDateKey(d.processedAtMs));
+  }
+  return out;
 }

@@ -75,6 +75,7 @@ on:
           - count-undetermined-documents --since 2026-11-01 --list-ids
           - count-undetermined-documents --since 2026-10-01 --list-ids
           - diagnose-unknown-customer-documents --since 2026-11-01
+          - diagnose-unknown-customer-documents --since 2026-10-01
           - delete-office-master --dry-run
           - delete-office-master --execute
           - reset-documents-by-office --dry-run
