@@ -13,13 +13,14 @@ FileNotFoundError を送出する(ダウンロードしない)。取得ロジッ
 コンストラクタ引数・結合順序はscripts/generate-paddle-ocr-golden-text.pyのocr_single_page_pdf()と
 一字一句一致させること。変更した場合、ADR-0025が実測した94/96正解という結果が無効になるため、
 scripts/generate-paddle-ocr-golden-text.pyの再実行による再検証が必須。
-(例外の記録: 2026-11-04にページ向き補正(use_doc_orientation_classify)を追加した。正常な向きのgolden
-6ページは本番設定と補正ありでOCRテキストが完全一致することを確認済みで、det/recの重みと
-結合順序は不変。詳細はADR-0031。)
+(例外の記録: 2026-11-04にページ向き補正(use_doc_orientation_classify)を追加した。golden生成スクリプトは
+意図的に補正なしのまま据え置いている(既存goldenの再現性を保つため)。補正なしと補正ありの照合は
+golden 6ページで別途行い完全一致を確認した(ローカルMac、ADR-0031)。det/recの重みと結合順序は不変。)
 """
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
@@ -29,6 +30,16 @@ DET_MODEL_NAME = "PP-OCRv6_medium_det"
 REC_MODEL_NAME = "PP-OCRv6_medium_rec"
 DOC_ORI_MODEL_NAME = "PP-LCNet_x1_0_doc_ori"
 
+logger = logging.getLogger("paddle-ocr.engine")
+
+# expected-model-hashes.jsonのキー -> モデルディレクトリ名。起動時検証(_verify_model_hashes)の対象で、
+# download_models.MODEL_KINDSと同一でなければならない(tests/test_ocr_engine.pyが一致を固定する)。
+MODEL_DIRS = {
+    "textDetection": DET_MODEL_NAME,
+    "textRecognition": REC_MODEL_NAME,
+    "docOrientation": DOC_ORI_MODEL_NAME,
+}
+
 
 def _verify_model_hashes(model_root: Path, expected: dict) -> None:
     """起動時にモデルファイルのSHA-256を再検証する(fail-loud)。
@@ -37,11 +48,7 @@ def _verify_model_hashes(model_root: Path, expected: dict) -> None:
     誤ったイメージへの差し替えを実行時に検知するため。100MB級のファイルでもSHA-256計算は
     数百ms程度でcold startへの影響は無視できる。
     """
-    for kind, dirname in (
-        ("textDetection", DET_MODEL_NAME),
-        ("textRecognition", REC_MODEL_NAME),
-        ("docOrientation", DOC_ORI_MODEL_NAME),
-    ):
+    for kind, dirname in MODEL_DIRS.items():
         spec = expected[kind]
         model_dir = model_root / dirname
         for fname, expected_hash in spec["fileHashes"].items():
@@ -79,9 +86,28 @@ class PaddleOcrEngine:
         with self._lock:
             result = self._engine.predict(rgb_array)
         try:
-            return list(result[0]["rec_texts"])
+            texts = list(result[0]["rec_texts"])
         except (KeyError, IndexError, TypeError) as e:
             raise RuntimeError(f"PaddleOCR実行結果の形状が想定外です: {e}") from e
+        self._log_orientation(result[0])
+        return texts
+
+    @staticmethod
+    def _log_orientation(page_result) -> None:
+        """向き補正で回したページを運用者が数えられるよう、適用角度が0度以外のときだけ警告ログを出す。
+
+        向き分類は信頼度の閾値なしで必ず適用される(正常な向きのページを誤って回せば、読み取りが劣化する)。
+        本番(uvicorn、rootロガーはWARNING)で出力されるようwarningにする(PDF_PAGE_DOWNSCALEDと同じ扱い)。
+        書類名・内容は含めず角度だけ。角度を取れなくてもOCR自体は止めない(観測のための情報のため)が、
+        黙って欠けないよう、取れなかったことをログに残す。
+        """
+        try:
+            angle = page_result["doc_preprocessor_res"]["angle"]
+        except (KeyError, IndexError, TypeError):
+            logger.warning("PAGE_ORIENTATION_ANGLE_UNAVAILABLE: 向き補正の適用角度を結果から取得できませんでした")
+            return
+        if angle not in (0, None):
+            logger.warning("PAGE_ORIENTATION_CORRECTED: 適用角度=%s度", angle)
 
     def page_text(self, rgb_array) -> str:
         """1ページ分のRGB配列から結合済みテキストを返す。
@@ -127,7 +153,9 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
         # ページ向きの自動補正(0/90/180/270度)。Gemini時代は画像を見て向きを吸収できたが、PaddleOCRは
         # 補正しないと横向き・上下逆のFAX帳票を読めない(合成の横向き帳票で、90度の片方向と180度が
         # 重要語0/13、出力が数字だけになることを再現。補正ありは4方向とも13/13。ADR-0031)。
-        # 正常な向きのページのテキストはgoldenと同一(回帰なし)であることを確認済み。
+        # 正常な向きのgolden 6ページ(ローカルMac)では、補正なしと補正ありのOCRテキストが完全一致した。
+        # 24文書全体の再評価は未実施(ADR-0031の「限界」参照)。保存される modelVersion は det/rec のハッシュ
+        # のままで、向き分類モデルは含めない(paddle-ocr-verify.tsの期待値導出と一致させるため)。
         doc_orientation_classify_model_name=DOC_ORI_MODEL_NAME,
         doc_orientation_classify_model_dir=str(doc_ori_dir),
         use_doc_orientation_classify=True,

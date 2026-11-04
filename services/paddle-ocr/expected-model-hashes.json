@@ -1,5 +1,5 @@
 {
-  "_comment": "ADR-0025 PR4a: PP-OCRv6 mediumモデルの同一性担保。hfRevisionはHugging Faceリポジトリのimmutable commit sha。fileHashesはscripts/fixtures/paddle-ocr-golden/manifest.jsonの実測値と同一(2026-09-12、24文書PoCで94/96正解を出した重みそのもの)。値を変更する場合はscripts/generate-paddle-ocr-golden-text.pyをローカル再実行して精度を再検証し、manifest.jsonと本ファイルを同時更新すること。無検証での更新は禁止。 2026-11-04追記: docOrientation(PP-LCNet_x1_0_doc_ori、ページ向き0/90/180/270度の分類)を追加。向き補正なしでは横向き・上下逆のFAX帳票が読めず「未判定」になっていた(ADR-0031)。",
+  "_comment": "ADR-0025 PR4a: PP-OCRv6 medium(textDetection/textRecognition)の同一性担保。hfRevisionはHugging Faceリポジトリのimmutable commit sha。textDetection/textRecognitionのfileHashesはscripts/fixtures/paddle-ocr-golden/manifest.jsonの実測値と同一(2026-09-12、24文書PoCで94/96正解を出した重みそのもの)。値を変更する場合はscripts/generate-paddle-ocr-golden-text.pyをローカル再実行して精度を再検証し、manifest.jsonと本ファイルを同時更新すること。無検証での更新は禁止。 docOrientation(PP-LCNet_x1_0_doc_ori、2026-11-04追加、ADR-0031)はmanifest.jsonの対象外(24文書PoCの重みではない)で、本ファイルが正本。変更する場合はADR-0031の手順(golden 6ページの補正なし/あり一致+合成横向き帳票)で再確認すること。",
   "textDetection": {
     "hfRepoId": "PaddlePaddle/PP-OCRv6_medium_det",
     "hfRevision": "8e0f56fb2ef86b461d99cfc7ac5c137738985f61",

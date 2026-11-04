@@ -117,6 +117,8 @@ def build_ocr_engine():
         text_detection_model_dir=str(DET_MODEL_DIR),
         text_recognition_model_name=REC_MODEL_NAME,
         text_recognition_model_dir=str(REC_MODEL_DIR),
+        # 意図的に補正なしのまま(ADR-0031): 本番(ocr_engine.py)は2026-11-04から向き補正ありだが、
+        # 既存goldenの再現性を保つため生成側は変えない。補正ありとの照合はgolden 6ページで別途実施済み。
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,

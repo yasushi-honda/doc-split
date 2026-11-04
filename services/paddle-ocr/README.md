@@ -56,11 +56,12 @@ ADR-0025(PaddleOCR移行)のPR4: 自前ホスティングPaddleOCR(PP-OCRv6 medi
 
 ## モデル同一性担保
 
-`expected-model-hashes.json`にHugging Faceリポジトリのimmutable revisionと重み本体3ファイル(`inference.json`/`inference.pdiparams`/`inference.yml`)のSHA-256を、モデルごと(det/rec/向き分類)に固定している。値は[`scripts/fixtures/paddle-ocr-golden/manifest.json`](../../scripts/fixtures/paddle-ocr-golden/manifest.json)の実測値(24文書PoCで94/96正解を出した重みそのもの)と同一。`download_models.py`がビルド時にこのrevisionから取得・検証し、`ocr_engine.py`が起動時に再検証する(fail-loud)。
+`expected-model-hashes.json`にHugging Faceリポジトリのimmutable revisionと重み本体3ファイル(`inference.json`/`inference.pdiparams`/`inference.yml`)のSHA-256を、モデルごと(det/rec/向き分類)に固定している。`download_models.py`がビルド時にこのrevisionから取得・検証し、`ocr_engine.py`が起動時に再検証する(fail-loud)。
 
-**ページ向き分類モデル(`PP-LCNet_x1_0_doc_ori`、`docOrientation`)**: 横向き・上下逆のFAX帳票を読むために追加した(ADR-0031)。det/recと同じ方式(固定revision+SHA-256のビルド時取得・起動時再検証)で固定している。無いと起動時検証で止まる(欠けたまま起動して横向き帳票が黙って読めなくなる事態を避ける)。このモデルのハッシュは`manifest.json`には無く(24文書PoCの対象外)、`expected-model-hashes.json`が正本。
-
-値を変更する場合は`scripts/generate-paddle-ocr-golden-text.py`をローカル再実行して精度を再検証し、`manifest.json`と`expected-model-hashes.json`を同時更新すること(無検証での更新は禁止)。
+- **det/rec**: 値は[`scripts/fixtures/paddle-ocr-golden/manifest.json`](../../scripts/fixtures/paddle-ocr-golden/manifest.json)の実測値(24文書PoCで94/96正解を出した重みそのもの)と同一。変更する場合は`scripts/generate-paddle-ocr-golden-text.py`をローカル再実行して精度を再検証し、`manifest.json`と`expected-model-hashes.json`を同時更新すること(無検証での更新は禁止)。
+- **向き分類(`PP-LCNet_x1_0_doc_ori`、`docOrientation`)**: 横向き・上下逆のFAX帳票を読むために追加した(ADR-0031)。24文書PoCの対象外で、`manifest.json`には無く、`expected-model-hashes.json`が正本。変更する場合は、golden 6ページで補正なし/ありのOCRテキストが一致すること、合成した横向き帳票(4方向)が読めることを再確認する(手順はADR-0031)。無いと起動時検証で止まる(欠けたまま起動して横向き帳票が黙って読めなくなる事態を避ける)。
+- **`modelVersion`(`/health`・`/ocr`の応答、`ocrExtraction.version`として書類に保存)はdet/recのハッシュだけ**で、向き分類モデルは含めない(`scripts/paddle-ocr-verify.ts`が同じ規則で期待値を導出するため)。向き補正の有無は`modelVersion`では区別できない。
+- **向き補正の観測**: 補正で回したページは警告ログ`PAGE_ORIENTATION_CORRECTED`(適用角度のみ、書類内容は含めない)を出す。角度を取れないときは`PAGE_ORIENTATION_ANGLE_UNAVAILABLE`。向き分類は信頼度の閾値なしで必ず適用されるため、正常な向きのページを誤って回していないかは、このログと書類の読み取り結果で追う。
 
 ## PR4a実装時の実機検証で判明した事項
 
