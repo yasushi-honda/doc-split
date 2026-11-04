@@ -11,6 +11,7 @@
  *
  * 使用方法(GitHub Actions: Run Operations Script):
  *   count-undetermined-documents --since 2026-11-01
+ *   count-undetermined-documents --since 2026-11-01 --list-ids   (再処理の対象候補の書類IDを併せて出力する。IDのみ)
  *
  * 直接実行:
  *   FIREBASE_PROJECT_ID=<project-id> npx ts-node scripts/count-undetermined-documents.ts --since 2026-11-01
@@ -21,6 +22,7 @@ import {
   isCustomerUnknown,
   jstDayRanges,
   parseSinceArg,
+  reprocessTargetIds,
   summarizeUndetermined,
   type UndeterminedDocInput,
 } from './lib/undeterminedSummary';
@@ -74,11 +76,11 @@ async function main(): Promise<void> {
     .select(...FIELDS)
     .get();
 
-  const docs: UndeterminedDocInput[] = snap.docs.map((d) => {
+  const entries = snap.docs.map((d) => {
     const data = d.data();
     const processedAt = data.processedAt as admin.firestore.Timestamp | undefined;
     const pages = data.totalPages;
-    return {
+    const input: UndeterminedDocInput = {
       processedAtMs: processedAt ? processedAt.toMillis() : null,
       verified: data.verified === true,
       customerUnknown: isCustomerUnknown(data.customerName),
@@ -86,7 +88,9 @@ async function main(): Promise<void> {
       mimeType: typeof data.mimeType === 'string' ? data.mimeType : null,
       hasDistributionId: typeof data.distributionId === 'string' && data.distributionId.length > 0,
     };
+    return { id: d.id, input };
   });
+  const docs: UndeterminedDocInput[] = entries.map((e) => e.input);
 
   const s = summarizeUndetermined(docs);
   console.log('');
@@ -105,6 +109,16 @@ async function main(): Promise<void> {
   console.log('');
   console.log('ページ数帯:', JSON.stringify(s.pagesBand));
   console.log('MIMEタイプ:', JSON.stringify(s.mimeTypes));
+
+  if (process.argv.includes('--list-ids')) {
+    // 再処理の対象候補(未確認かつ利用者不明)の書類IDのみ。書類名・利用者名は出さない
+    const ids = reprocessTargetIds(entries);
+    console.log('');
+    console.log(`再処理の対象候補の書類ID(${ids.length}件):`);
+    for (const id of ids) console.log(id);
+    const dropped = s.reprocessTargets - ids.length;
+    if (dropped > 0) console.log(`形式検査で出力しなかったID: ${dropped}件(対象候補の件数と食い違う場合の確認用)`);
+  }
 }
 
 main()

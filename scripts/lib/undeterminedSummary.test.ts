@@ -7,6 +7,7 @@ import {
   normalizeMimeType,
   pageBand,
   parseSinceArg,
+  reprocessTargetIds,
   summarizeUndetermined,
   type UndeterminedDocInput,
 } from './undeterminedSummary';
@@ -188,4 +189,35 @@ test('jstDayRanges: nowがちょうど日の0時なら、その日(空)も1個�
   const since = Date.parse('2026-10-31T15:00:00Z');
   assert.equal(jstDayRanges(since, since).length, 1);
   assert.deepEqual(jstDayRanges(since, since - 1), []);
+});
+
+test('reprocessTargetIds: 未確認かつ利用者不明の書類IDだけを返す(確認済み・利用者判定済みは除く)', () => {
+  const ids = reprocessTargetIds([
+    { id: 'aaa111', input: doc() },
+    { id: 'bbb222', input: doc({ verified: true }) },
+    { id: 'ccc333', input: doc({ customerUnknown: false }) },
+    { id: 'ddd444', input: doc() },
+  ]);
+  assert.deepEqual(ids, ['aaa111', 'ddd444']);
+});
+
+test('reprocessTargetIds: ID文字列の形式が英数字・_・-以外(想定外の文字)なら出力しない(公開ログ保護)', () => {
+  const ids = reprocessTargetIds([
+    { id: 'ok_ID-1', input: doc() },
+    { id: '田中太郎', input: doc() },
+    { id: 'has space', input: doc() },
+    { id: '', input: doc() },
+  ]);
+  assert.deepEqual(ids, ['ok_ID-1']);
+});
+
+test('reprocessTargetIds: 空入力は空配列、並びは入力順(再現性)', () => {
+  assert.deepEqual(reprocessTargetIds([]), []);
+  assert.deepEqual(
+    reprocessTargetIds([
+      { id: 'z9', input: doc() },
+      { id: 'a1', input: doc() },
+    ]),
+    ['z9', 'a1'],
+  );
 });
