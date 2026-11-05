@@ -68,6 +68,10 @@ const ALLOWLIST = new Set([
   // reset-document-to-pending.jsと同じく、detail/main優先+legacy root pageResultsの両方を
   // FieldValue.delete()する削除実行者であり、内容を読んで業務ロジックに使う「読者」ではない。
   'reprocess-unknown-customer-documents.ts',
+  // 再処理しても未判定・利用者不明のまま残る書類を、特徴の件数だけで分類するread-onlyの診断(ADR-0031)。
+  // detail/main の ocrResult は「文字数」だけを帯に丸めて使い、内容は出力しない。親docにしか無い旧形式の書類は
+  // 'missing' の帯に数えるだけで、業務ロジックの「読者」ではない(書き込みもしない)。
+  'classify-unresolved-documents.ts',
 ]);
 
 const EXCLUDED_DIR_NAMES = new Set(['node_modules', '.git']);
