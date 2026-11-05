@@ -92,6 +92,10 @@ on:
           - classify-unresolved-documents --since 2026-10-01 --until 2026-11-01 --group unknown-customer
           - measure-undetermined-rate --since 2026-10-01 --cutoff 2026-11-04T18:30
           - measure-undetermined-rate --since 2026-08-15 --cutoff 2026-09-19T00:00 --bucket-hours 24
+          - ab-orientation-compare --control golden
+          - ab-orientation-compare --since 2026-11-01 --group undetermined --limit 10
+          - ab-orientation-compare --since 2026-11-01 --group undetermined --limit 100
+          - ab-orientation-compare --since 2026-11-01 --group determined --limit 20
           - reprocess-unknown-customer-documents --since 2026-10-01 --mode undetermined --limit 2 --execute
           - delete-office-master --dry-run
           - delete-office-master --execute
@@ -2647,6 +2651,19 @@ jobs:
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               npx ts-node classify-unresolved-documents.ts $SCRIPT_ARGS
+          elif [ "$SCRIPT_NAME" = "ab-orientation-compare" ]; then
+            # ADR-0031: 向き補正あり・なしの対照実験(read-only)。補正なし=タグorientoff(旧リビジョン・トラフィック0)、
+            # 補正あり=現行。出力は件数と固定の帯のみ(書類名・本文・IDは出さない)。
+            SVC_JSON=$(gcloud run services describe paddle-ocr --project="$PROJECT_ID" --region=asia-northeast1 --format=json)
+            AB_ON_URL=$(echo "$SVC_JSON" | jq -r '.status.url')
+            AB_OFF_URL=$(echo "$SVC_JSON" | jq -r '[.status.traffic[] | select(.tag=="orientoff") | .url][0] // empty')
+            if [ -z "$AB_OFF_URL" ]; then echo "ERROR: タグ orientoff が見つかりません"; exit 1; fi
+            cd scripts
+            AB_ON_URL="$AB_ON_URL" AB_OFF_URL="$AB_OFF_URL" \
+              NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              STORAGE_BUCKET="${{ steps.resolve.outputs.storage_bucket }}" \
+              npx ts-node ab-orientation-compare.ts $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "measure-undetermined-rate" ]; then
             # ADR-0031: 向き補正の反映時刻の前後で、書類種別が未判定の割合を比べる(read-only、count()のみ)。
             # 出力は公開ログに載るため、件数と割合のみ(書類の中身は読まない)。
