@@ -155,9 +155,12 @@ export function exitCodeFor(s: TransitionSummary, failedResets: number): number 
   return 0;
 }
 
-/** processOCRの処理能力: 1分ごとに最大5件(BATCH_SIZE=5)。余裕を見て8割で見積もる */
-const OCR_QUEUE_PER_MINUTE = 5;
-const OCR_QUEUE_MARGIN = 0.8;
+/**
+ * processOCRの実測の処理能力(1分あたりの書類数)。コード上の上限は1分5件(BATCH_SIZE=5)だが、
+ * 実測は遅い: 10月分75件のうち67件が40分(約1.7件/分)、11月分47件が約25分(約1.9件/分)。
+ * 余裕を見て1.5件/分で見積もる。
+ */
+const OCR_QUEUE_PER_MINUTE = 1.5;
 
 /**
  * count件の再処理が、待機時間(分)の内に終わる見込みか。再処理した書類は古いprocessedAtのまま
@@ -166,7 +169,12 @@ const OCR_QUEUE_MARGIN = 0.8;
  */
 export function fitsInWaitWindow(count: number, waitMinutes: number): boolean {
   if (!Number.isFinite(waitMinutes) || waitMinutes <= 0) return false;
-  return count <= Math.floor(waitMinutes * OCR_QUEUE_PER_MINUTE * OCR_QUEUE_MARGIN);
+  return count <= Math.floor(waitMinutes * OCR_QUEUE_PER_MINUTE);
+}
+
+/** count件の再処理で、新しく届く書類の処理が遅れる見込み(分、切り上げ) */
+export function estimatedDelayMinutes(count: number): number {
+  return count <= 0 ? 0 : Math.ceil(count / OCR_QUEUE_PER_MINUTE);
 }
 
 export type OcrEngineBucket = 'paddle' | 'gemini' | 'other' | 'unknown';

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  estimatedDelayMinutes,
   exitCodeFor,
   ocrEngineBucket,
   fitsInWaitWindow,
@@ -157,11 +158,20 @@ test('exitCodeFor: 未完了と他の問題が重なれば2(未完了を優先�
   assert.equal(exitCodeFor({ ...CLEAN, notFinished: 1, error: 1 }, 1), 2);
 });
 
-test('fitsInWaitWindow: 処理能力(1分5件の8割)で待機時間内に終わる件数なら真', () => {
-  // 40分 × 5件/分 × 0.8 = 160件
-  assert.equal(fitsInWaitWindow(160, 40), true);
-  assert.equal(fitsInWaitWindow(161, 40), false);
+test('fitsInWaitWindow: 実測の処理能力(1分1.5件)で、待機時間内に終わる件数なら真', () => {
+  // 40分 × 1.5件/分 = 60件(実測: 75件のうち67件が40分、47件が約25分 = 1.7〜1.9件/分)
+  assert.equal(fitsInWaitWindow(60, 40), true);
+  assert.equal(fitsInWaitWindow(61, 40), false);
+  assert.equal(fitsInWaitWindow(75, 40), false); // 10月分75件は、40分の待機では終わらなかった実績どおり拒否
+  assert.equal(fitsInWaitWindow(75, 60), true); // 60分なら通る(90件まで)
   assert.equal(fitsInWaitWindow(0, 40), true);
+});
+
+test('estimatedDelayMinutes: 件数を実測の処理能力で割った、新着の遅れの見込み(分、切り上げ)', () => {
+  assert.equal(estimatedDelayMinutes(75), 50);
+  assert.equal(estimatedDelayMinutes(47), 32);
+  assert.equal(estimatedDelayMinutes(1), 1);
+  assert.equal(estimatedDelayMinutes(0), 0);
 });
 
 test('fitsInWaitWindow: 待機時間が不正(0以下・NaN)なら偽(誤って通さない)', () => {
