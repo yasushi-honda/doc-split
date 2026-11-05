@@ -97,3 +97,11 @@ test('summarizeFeatures: 0件でも崩れない', () => {
   const s = summarizeFeatures([]);
   assert.deepEqual(s.pages, {});
 });
+
+test("textLengthBand: 本文をStorageへ退避した書類(ocrResultUrlあり)は、detailが空文字でも 'external' に数える", () => {
+  // 本文が100000文字を超えると、detail/main.ocrResult には空文字が書かれ、本文は外部保存になる
+  assert.equal(textLengthBand('', true), 'external');
+  assert.equal(textLengthBand(undefined, true), 'external');
+  assert.equal(textLengthBand('abc', true), 'external'); // 外部URLがあれば、外部保存を優先する
+  assert.equal(textLengthBand('', false), '0'); // 外部URLがなく空文字なら、本当に本文なし
+});

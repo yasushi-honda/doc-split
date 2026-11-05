@@ -23,7 +23,10 @@ export function pagesBand(value: unknown): PagesBand {
 
 /** 認識テキストの長さ(文字数)だけを帯にする。内容は見ない。外部保存(ocrResultUrl)と欠損は別に数える */
 export function textLengthBand(text: unknown, hasExternalUrl: boolean): TextLengthBand {
-  if (typeof text !== 'string') return hasExternalUrl ? 'external' : 'missing';
+  // 本文が100000文字を超えるとStorageへ退避され、detail/main.ocrResult には空文字が書かれる。
+  // 外部URLがあれば、長さの帯より先に 'external' に数える(最も長い本文を「本文なし」と読み違えない)
+  if (hasExternalUrl) return 'external';
+  if (typeof text !== 'string') return 'missing';
   const n = text.length;
   if (n === 0) return '0';
   if (n < 50) return '1-49';
