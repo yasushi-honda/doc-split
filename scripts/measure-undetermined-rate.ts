@@ -1,6 +1,6 @@
 #!/usr/bin/env ts-node
 /**
- * 向き補正の反映時刻の前後で、書類種別が「未判定」の割合を比べる(read-only、PIIなし、件数と割合のみ)。
+ * 境界時刻(--cutoff)の前後で、書類種別が「未判定」の割合を比べる(read-only、PIIなし、件数と割合のみ)。
  *
  * 背景: ADR-0031。向き補正が未判定の主因だったかを確かめる、最も直接的な指標。反映後(--cutoff以降)に
  * 取り込まれた書類は、補正入りの仕組みで処理されている。再処理した書類は処理日時が古いままなので、
@@ -106,27 +106,27 @@ async function main(): Promise<void> {
     console.error('--cutoff が現在より後です');
     process.exit(1);
   }
-  console.log(`反映時刻(--cutoff): ${label(cutoffAtMs)} JST。窓は、処理日時(取り込み時刻)で切る`);
+  console.log(`境界時刻(--cutoff): ${label(cutoffAtMs)} JST。窓は、処理日時(取り込み時刻)で切る`);
 
   const before = await measure(timeRanges(sinceStartMs, cutoffAtMs, DAY_MS));
   const after = await measure(timeRanges(cutoffAtMs, nowMs, bucketHours * 3_600_000));
 
   console.log('');
-  console.log(`== 反映前(${since} 〜 反映時刻)。日別 ==`);
-  console.log('注: 再処理で未判定が解消した書類を含むため、再処理の前に記録した値(10月7.9%など)より低く出る');
+  console.log(`== 境界前(${since} 〜 境界時刻)。日別 ==`);
+  console.log('注: 2026-10-05以降に取り込まれた書類は、再処理で未判定が解消した分を含むため、再処理の前に記録した値(10月7.9%など)より低く出る');
   printRows(before);
   const b = sum(before);
-  console.log(`反映前の合計 | ${b.total} | ${b.undetermined} | ${formatRate(b.undetermined, b.total)}`);
+  console.log(`境界前の合計 | ${b.total} | ${b.undetermined} | ${formatRate(b.undetermined, b.total)}`);
 
   console.log('');
-  console.log(`== 反映後(反映時刻 〜 現在)。${bucketHours}時間ごと ==`);
-  console.log('注: 再処理や分割で新しく作られた書類(FAX複製・PDF分割)は、反映後の窓に入りうる');
+  console.log(`== 境界後(境界時刻 〜 現在)。${bucketHours}時間ごと ==`);
+  console.log('注: 再処理や分割で新しく作られた書類(FAX複製・PDF分割)は、境界後の窓に入りうる');
   printRows(after);
   const a = sum(after);
-  console.log(`反映後の合計 | ${a.total} | ${a.undetermined} | ${formatRate(a.undetermined, a.total)}`);
+  console.log(`境界後の合計 | ${a.total} | ${a.undetermined} | ${formatRate(a.undetermined, a.total)}`);
 
   console.log('');
-  console.log('比較の目安: 再処理の前に記録した率は、10月7.9%、11月(11/1〜11/4)は日別で4.2〜10.0%。反映後の信頼区間の上限が、この値を下回れば、低下の根拠になる');
+  console.log('読み方: 境界の前後で、率の信頼区間が重ならなければ、差の根拠になる。重なる場合は、差があるとは言えない');
 }
 
 main()
