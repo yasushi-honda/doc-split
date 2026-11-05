@@ -34,6 +34,7 @@ import {
   exitCodeFor,
   fitsInWaitWindow,
   isReprocessEligible,
+  ocrEngineBucket,
   selectReprocessTargets,
   summarizeTransitions,
   type AfterState,
@@ -60,6 +61,16 @@ if (!since || sinceMs === null) {
   process.exit(1);
 }
 const sinceStartMs: number = sinceMs;
+const untilArg = getArg('--until');
+let untilMs: number | undefined;
+if (untilArg !== undefined) {
+  const parsed = parseSinceArg(untilArg);
+  if (parsed === null || parsed <= sinceStartMs) {
+    console.error('--until YYYY-MM-DD(JSTの実在する日付、--sinceより後。その日の0時を含まない上限)を指定してください');
+    process.exit(1);
+  }
+  untilMs = parsed;
+}
 const execute = process.argv.includes('--execute');
 const all = process.argv.includes('--all');
 const modeArg = getArg('--mode') ?? 'unknown-customer';
@@ -92,7 +103,7 @@ admin.initializeApp({ projectId });
 const db = admin.firestore();
 
 const STORED_UNKNOWN_CUSTOMER = '不明顧客';
-const FIELDS = ['status', 'processedAt', 'verified', 'customerName', 'documentType'] as const;
+const FIELDS = ['status', 'processedAt', 'verified', 'customerName', 'documentType', 'ocrExtraction.version'] as const;
 const READ_LIMIT = 20000;
 const POLL_INTERVAL_MS = 30_000;
 
@@ -138,8 +149,8 @@ function assertPaddleProvider(): void {
 async function main(): Promise<void> {
   console.log(
     mode === 'undetermined'
-      ? `対象: 書類種別が「未判定」・processed・人の確認なし・処理日時(JST) >= ${since} 0時(利用者が確定済みの書類も含む)`
-      : `対象: customerName='不明顧客'・processed・人の確認なし・処理日時(JST) >= ${since} 0時`,
+      ? `対象: 書類種別が「未判定」・processed・人の確認なし・処理日時(JST) >= ${since} 0時${untilArg ? ` かつ < ${untilArg} 0時` : ''}(利用者が確定済みの書類も含む)`
+      : `対象: customerName='不明顧客'・processed・人の確認なし・処理日時(JST) >= ${since} 0時${untilArg ? ` かつ < ${untilArg} 0時` : ''}`,
   );
   const snap = await db
     .collection('documents')
@@ -154,6 +165,7 @@ async function main(): Promise<void> {
 
   const candidates: TargetCandidate[] = [];
   const typeById = new Map<string, BeforeState>();
+  const engineById = new Map<string, string>();
   for (const d of snap.docs) {
     const data = d.data();
     candidates.push({
@@ -164,10 +176,11 @@ async function main(): Promise<void> {
       customerUnknown: isCustomerUnknown(data.customerName),
       docTypeBucket: bucketDocumentType(data.documentType),
     });
+    engineById.set(d.id, ocrEngineBucket(data.ocrExtraction?.version));
     typeById.set(d.id, { docTypeBucket: bucketDocumentType(data.documentType), customerUnknown: isCustomerUnknown(data.customerName) });
   }
-  const ids = selectReprocessTargets(candidates, sinceStartMs, all ? undefined : limit, mode);
-  const allIds = selectReprocessTargets(candidates, sinceStartMs, undefined, mode);
+  const ids = selectReprocessTargets(candidates, sinceStartMs, all ? undefined : limit, mode, untilMs);
+  const allIds = selectReprocessTargets(candidates, sinceStartMs, undefined, mode, untilMs);
   console.log(`${mode === 'undetermined' ? '書類種別が「未判定」' : "customerName='不明顧客'"}の書類(全期間): ${snap.size}件`);
   console.log(`再処理の対象(窓の内側・processed・確認なし・${mode === 'undetermined' ? '未判定' : '利用者不明'}): ${allIds.length}件`);
   console.log(`今回の実行対象: ${ids.length}件${all ? '(全件)' : limit !== undefined ? `(--limit ${limit})` : ''}`);
@@ -177,6 +190,12 @@ async function main(): Promise<void> {
   for (const b of before.values()) beforeTypes[b.docTypeBucket] = (beforeTypes[b.docTypeBucket] ?? 0) + 1;
   console.log(`  書類種別(再処理前): ${Object.entries(beforeTypes).map(([k, v]) => `${k}=${v}`).join(', ') || '(なし)'}`);
   console.log(`  うち利用者が不明(再処理前): ${[...before.values()].filter((b) => b.customerUnknown).length}件`);
+  const engines: Record<string, number> = {};
+  for (const id of before.keys()) {
+    const e = engineById.get(id) ?? 'unknown';
+    engines[e] = (engines[e] ?? 0) + 1;
+  }
+  console.log(`  処理に使った仕組み(再処理前): ${Object.entries(engines).map(([k, v]) => `${k}=${v}`).join(', ') || '(なし)'}`);
 
   if (!execute) {
     console.log('\nDRY RUN: 書込みは実行しません。--execute と --limit N または --all で実行してください。');
