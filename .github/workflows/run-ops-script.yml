@@ -86,6 +86,10 @@ on:
           - reprocess-unknown-customer-documents --since 2026-10-01 --mode undetermined
           - reprocess-unknown-customer-documents --since 2026-10-01 --until 2026-11-01 --mode undetermined
           - reprocess-unknown-customer-documents --since 2026-10-01 --until 2026-11-01 --mode undetermined --all --execute
+          - classify-unresolved-documents --since 2026-11-01 --group undetermined
+          - classify-unresolved-documents --since 2026-11-01 --group unknown-customer
+          - classify-unresolved-documents --since 2026-10-01 --until 2026-11-01 --group undetermined
+          - classify-unresolved-documents --since 2026-10-01 --until 2026-11-01 --group unknown-customer
           - reprocess-unknown-customer-documents --since 2026-10-01 --mode undetermined --limit 2 --execute
           - delete-office-master --dry-run
           - delete-office-master --execute
@@ -2634,6 +2638,13 @@ jobs:
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               npx ts-node reprocess-unknown-customer-documents.ts $SCRIPT_ARGS
+          elif [ "$SCRIPT_NAME" = "classify-unresolved-documents" ]; then
+            # ADR-0031: 再処理しても未判定・利用者不明のまま残る書類を、特徴の件数のみで分類する(read-only)。
+            # 出力は公開ログに載るため、書類名・利用者名・本文・ID・抽出された値は出さない(固定の帯の件数のみ)。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node classify-unresolved-documents.ts $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "count-undetermined-documents" ]; then
             # ADR-0031: 書類種別「未判定」の件数を日別・ページ数帯・MIME別に集計する(read-only、件数のみ)。
             # 出力は公開ログに載るため、書類名・利用者名・本文は取得も出力もしない。
