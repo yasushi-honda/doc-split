@@ -256,3 +256,8 @@ test('ocrEngineBucket: 処理に使った仕組みを、固定語彙(paddle/gemi
   assert.equal(ocrEngineBucket(''), 'unknown');
   assert.equal(ocrEngineBucket(42), 'unknown');
 });
+
+test("ocrEngineBucket: OCRを実行しなかった書類が持つ文字列 'unknown' は、other ではなく unknown に数える", () => {
+  assert.equal(ocrEngineBucket('unknown'), 'unknown');
+  assert.equal(ocrEngineBucket(' unknown '), 'unknown');
+});

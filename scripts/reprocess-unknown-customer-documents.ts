@@ -63,6 +63,11 @@ if (!since || sinceMs === null) {
 const sinceStartMs: number = sinceMs;
 const untilArg = getArg('--until');
 let untilMs: number | undefined;
+// 末尾の--untilに値が無いと上限なしで動いてしまう(窓が黙って広がる)ため、値なしは止める
+if (process.argv.includes('--until') && untilArg === undefined) {
+  console.error('--until には YYYY-MM-DD を指定してください');
+  process.exit(1);
+}
 if (untilArg !== undefined) {
   const parsed = parseSinceArg(untilArg);
   if (parsed === null || parsed <= sinceStartMs) {

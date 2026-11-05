@@ -173,7 +173,8 @@ export type OcrEngineBucket = 'paddle' | 'gemini' | 'other' | 'unknown';
 
 /** 書類を処理したOCRの仕組み(ocrExtraction.version)を、固定語彙に丸める。自由文字列は出力に出さない */
 export function ocrEngineBucket(version: unknown): OcrEngineBucket {
-  if (typeof version !== 'string' || version === '') return 'unknown';
+  // OCRを実行しなかった書類は、versionに文字どおり'unknown'が書かれる。第3の仕組み(other)と読み違えない
+  if (typeof version !== 'string' || version.trim() === '' || version.trim() === 'unknown') return 'unknown';
   if (/gemini/i.test(version)) return 'gemini';
   if (/pp-?ocr/i.test(version)) return 'paddle';
   return 'other';
