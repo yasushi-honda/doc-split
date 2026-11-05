@@ -20,7 +20,8 @@ import * as admin from 'firebase-admin';
 import { PDFDocument, degrees } from 'pdf-lib';
 import { ocrWithPaddle } from '../functions/src/ocr/paddleOcrClient';
 import { extractDocumentTypeEnhanced, type DocumentMaster } from '../functions/src/utils/extractors';
-import { loadMasterData } from '../functions/src/utils/loadMasterData';
+import { MASTER_PATHS } from '../functions/src/utils/masterPaths';
+import { sanitizeDocumentMasters } from '../functions/src/utils/sanitizeMasterData';
 import { parseSinceArg } from './lib/undeterminedSummary';
 import { bucketDocumentType, bucketStatus } from './lib/unknownCustomerDiagnosis';
 import { isDetermined, japaneseRatio, summarizePairs, type PairRow } from './lib/abCompare';
@@ -55,8 +56,10 @@ const REQUEST_TIMEOUT_MS = 120_000;
 admin.initializeApp({ projectId, storageBucket: process.env.STORAGE_BUCKET });
 const db = admin.firestore();
 
-const noAuthFallback = async (audience: string): Promise<Record<string, string>> => {
+// Cloud Runのタグ付きURLでも、IDトークンの宛先は正規のサービスURL(補正ありのURL)にする
+const authHeaders = async (): Promise<Record<string, string>> => {
   const { GoogleAuth } = await import('google-auth-library');
+  const audience = (onUrl as string).replace(/\/+$/, '');
   const client = await new GoogleAuth().getIdTokenClient(audience);
   return (await client.getRequestHeaders()) as unknown as Record<string, string>;
 };
@@ -66,7 +69,7 @@ async function ocrPdfPages(pages: Buffer[], serviceUrl: string): Promise<string>
   for (let i = 0; i < pages.length; i++) {
     const r = await ocrWithPaddle(pages[i], 'application/pdf', i + 1, {
       config: { serviceUrl, requestTimeoutMs: REQUEST_TIMEOUT_MS },
-      getAuthHeaders: noAuthFallback,
+      getAuthHeaders: authHeaders,
     });
     parts.push(`--- Page ${i + 1} ---\n${r.text}`);
   }
@@ -112,7 +115,13 @@ function report(label: string, rows: PairRow[], skipped: number, failed: number)
 }
 
 async function main(): Promise<void> {
-  const masters = await loadMasterData(db, { source: 'ocr', functionName: 'ab-orientation-compare' });
+  // 書類種別のマスターのみ読む。loadMasterDataは不正なマスターのIDを公開ログに出すため使わない(本スクリプトは件数のみ出力)
+  const docMasterSnap = await db.collection(MASTER_PATHS.documents).get();
+  const masters = {
+    documents: sanitizeDocumentMasters(
+      docMasterSnap.docs.map((d) => ({ id: d.id, ...(d.data() as object) }) as DocumentMaster)
+    ).items,
+  };
   const deadline = Date.now() + timeBoxMin * 60_000;
 
   if (control) {
