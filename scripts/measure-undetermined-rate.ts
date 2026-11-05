@@ -4,7 +4,8 @@
  *
  * 背景: ADR-0031。向き補正が未判定の主因だったかを確かめる、最も直接的な指標。反映後(--cutoff以降)に
  * 取り込まれた書類は、補正入りの仕組みで処理されている。再処理した書類は処理日時が古いままなので、
- * 反映後の集計には入らない。集計はFirestoreのcount()だけで、書類の中身は読まない。
+ * 反映後の集計には入らない(再処理スクリプトはprocessedAtを更新しない)。ただし、再処理や分割で新しく作られた
+ * 書類(FAX複製・PDF分割)は処理日時が作成時刻になるため、反映後の集計に入りうる。集計はFirestoreのcount()だけで、書類の中身は読まない。
  *
  * 注意:
  *   - 反映前の値は、再処理で未判定が解消した書類を含むため、再処理の前に記録した値(10月7.9%など)より低く出る。
@@ -114,11 +115,12 @@ async function main(): Promise<void> {
   console.log(`== 反映前(${since} 〜 反映時刻)。日別 ==`);
   console.log('注: 再処理で未判定が解消した書類を含むため、再処理の前に記録した値(10月7.9%など)より低く出る');
   printRows(before);
-  const b = sum(before.length ? before : []);
+  const b = sum(before);
   console.log(`反映前の合計 | ${b.total} | ${b.undetermined} | ${formatRate(b.undetermined, b.total)}`);
 
   console.log('');
   console.log(`== 反映後(反映時刻 〜 現在)。${bucketHours}時間ごと ==`);
+  console.log('注: 再処理や分割で新しく作られた書類(FAX複製・PDF分割)は、反映後の窓に入りうる');
   printRows(after);
   const a = sum(after);
   console.log(`反映後の合計 | ${a.total} | ${a.undetermined} | ${formatRate(a.undetermined, a.total)}`);
