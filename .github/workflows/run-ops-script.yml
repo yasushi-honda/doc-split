@@ -91,6 +91,7 @@ on:
           - classify-unresolved-documents --since 2026-10-01 --until 2026-11-01 --group undetermined
           - classify-unresolved-documents --since 2026-10-01 --until 2026-11-01 --group unknown-customer
           - measure-undetermined-rate --since 2026-10-01 --cutoff 2026-11-04T18:30
+          - measure-undetermined-rate --since 2026-08-15 --cutoff 2026-09-19T00:00 --bucket-hours 24
           - reprocess-unknown-customer-documents --since 2026-10-01 --mode undetermined --limit 2 --execute
           - delete-office-master --dry-run
           - delete-office-master --execute
