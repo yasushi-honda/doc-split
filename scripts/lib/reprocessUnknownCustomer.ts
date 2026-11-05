@@ -43,12 +43,25 @@ export function isReprocessEligible(
 
 /**
  * 再処理の対象IDを返す。窓(sinceMs以降の処理日時)の内側・processed・人の確認なし・利用者不明の書類。
+ * untilMs(排他的な上限)を指定すると、処理日時がそれ以降の書類は除く(月ごとの再処理用)。
  * 処理日時の昇順(同時刻はID順)。limitが正の有限数なら先頭からlimit件に切る(カナリア用)。
  * limitが0以下・NaNは「全件」(誤って0件にしないため)。
  */
-export function selectReprocessTargets(docs: TargetCandidate[], sinceMs: number, limit?: number, mode: ReprocessMode = 'unknown-customer'): string[] {
+export function selectReprocessTargets(
+  docs: TargetCandidate[],
+  sinceMs: number,
+  limit?: number,
+  mode: ReprocessMode = 'unknown-customer',
+  untilMs?: number,
+): string[] {
   const selected = docs
-    .filter((d) => isReprocessEligible(d, mode) && d.processedAtMs !== null && d.processedAtMs >= sinceMs)
+    .filter(
+      (d) =>
+        isReprocessEligible(d, mode) &&
+        d.processedAtMs !== null &&
+        d.processedAtMs >= sinceMs &&
+        (untilMs === undefined || d.processedAtMs < untilMs),
+    )
     .sort((a, b) => (a.processedAtMs as number) - (b.processedAtMs as number) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((d) => d.id);
   return typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? selected.slice(0, Math.floor(limit)) : selected;
@@ -154,4 +167,15 @@ const OCR_QUEUE_MARGIN = 0.8;
 export function fitsInWaitWindow(count: number, waitMinutes: number): boolean {
   if (!Number.isFinite(waitMinutes) || waitMinutes <= 0) return false;
   return count <= Math.floor(waitMinutes * OCR_QUEUE_PER_MINUTE * OCR_QUEUE_MARGIN);
+}
+
+export type OcrEngineBucket = 'paddle' | 'gemini' | 'other' | 'unknown';
+
+/** 書類を処理したOCRの仕組み(ocrExtraction.version)を、固定語彙に丸める。自由文字列は出力に出さない */
+export function ocrEngineBucket(version: unknown): OcrEngineBucket {
+  // OCRを実行しなかった書類は、versionに文字どおり'unknown'が書かれる。第3の仕組み(other)と読み違えない
+  if (typeof version !== 'string' || version.trim() === '' || version.trim() === 'unknown') return 'unknown';
+  if (/gemini/i.test(version)) return 'gemini';
+  if (/pp-?ocr/i.test(version)) return 'paddle';
+  return 'other';
 }

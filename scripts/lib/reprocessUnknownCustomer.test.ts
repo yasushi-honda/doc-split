@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   exitCodeFor,
+  ocrEngineBucket,
   fitsInWaitWindow,
   isReprocessEligible,
   selectReprocessTargets,
@@ -231,4 +232,32 @@ test('summarizeTransitions: 元は利用者が確定済みだった書類が、�
 
 test('exitCodeFor: 利用者を失った書類があれば1(副作用を、緑のジョブに埋もれさせない)', () => {
   assert.equal(exitCodeFor({ ...CLEAN, customerLost: 1 }, 0), 1);
+});
+
+test('selectReprocessTargets: untilMs(排他的な上限)を超える処理日時は除く。上限ちょうどは含まない', () => {
+  const UNTIL = IN + 10_000;
+  const docs = [cand('in', { processedAtMs: IN }), cand('edge', { processedAtMs: UNTIL }), cand('after', { processedAtMs: UNTIL + 1 })];
+  assert.deepEqual(selectReprocessTargets(docs, SINCE, undefined, 'unknown-customer', UNTIL), ['in']);
+  assert.deepEqual(selectReprocessTargets(docs, SINCE, undefined, 'unknown-customer'), ['in', 'edge', 'after']); // 上限なしは従来どおり
+});
+
+test('selectReprocessTargets: untilMs と limit は併用でき、窓で絞ってから先頭limit件を取る', () => {
+  const docs = [cand('a', { processedAtMs: IN }), cand('b', { processedAtMs: IN + 1 }), cand('c', { processedAtMs: IN + 2 })];
+  assert.deepEqual(selectReprocessTargets(docs, SINCE, 1, 'unknown-customer', IN + 2), ['a']);
+});
+
+test('ocrEngineBucket: 処理に使った仕組みを、固定語彙(paddle/gemini/other/unknown)に丸める(自由文字列を出さない)', () => {
+  assert.equal(ocrEngineBucket('PP-OCRv6_medium'), 'paddle');
+  assert.equal(ocrEngineBucket('gemini-2.5-flash'), 'gemini');
+  assert.equal(ocrEngineBucket('Gemini-3.5'), 'gemini');
+  assert.equal(ocrEngineBucket('something-secret-name'), 'other');
+  assert.equal(ocrEngineBucket(undefined), 'unknown');
+  assert.equal(ocrEngineBucket(null), 'unknown');
+  assert.equal(ocrEngineBucket(''), 'unknown');
+  assert.equal(ocrEngineBucket(42), 'unknown');
+});
+
+test("ocrEngineBucket: OCRを実行しなかった書類が持つ文字列 'unknown' は、other ではなく unknown に数える", () => {
+  assert.equal(ocrEngineBucket('unknown'), 'unknown');
+  assert.equal(ocrEngineBucket(' unknown '), 'unknown');
 });
