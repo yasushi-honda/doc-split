@@ -96,6 +96,8 @@ on:
           - ab-orientation-compare --since 2026-11-01 --group undetermined --limit 10
           - ab-orientation-compare --since 2026-11-01 --group undetermined --limit 100
           - ab-orientation-compare --since 2026-11-01 --group determined --limit 20
+          - ab-orientation-compare --since 2026-10-01 --group reprocessed --cutoff 2026-11-04T18:30 --limit 10
+          - ab-orientation-compare --since 2026-10-01 --group reprocessed --cutoff 2026-11-04T18:30 --limit 100
           - reprocess-unknown-customer-documents --since 2026-10-01 --mode undetermined --limit 2 --execute
           - delete-office-master --dry-run
           - delete-office-master --execute
