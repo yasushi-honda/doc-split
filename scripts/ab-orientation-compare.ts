@@ -7,6 +7,8 @@
  *
  * 使い方(GitHub Actions: Run Operations Script):
  *   ab-orientation-compare --since 2026-11-01 --group undetermined --limit 10
+ *   ab-orientation-compare --since 2026-10-01 --group reprocessed --cutoff 2026-11-04T18:30 --limit 100
+ *     (reprocessed = 補正反映前に取り込まれ、反映後に読み直された書類。現在の状態だけで選ぶと"解消しなかったもの"に偏るため、この選び方が補正の効果測定の本命)
  *   ab-orientation-compare --control golden   (PDF固定を0/90/180/270°に回した対照。書類は読まない)
  * 補正ありのURLは現行のpaddle-ocr、補正なしのURLはタグ`orientoff`(旧リビジョン、トラフィック0)から、ワークフローが取得して渡す。
  *
@@ -23,6 +25,7 @@ import { extractDocumentTypeEnhanced, type DocumentMaster } from '../functions/s
 import { MASTER_PATHS } from '../functions/src/utils/masterPaths';
 import { sanitizeDocumentMasters } from '../functions/src/utils/sanitizeMasterData';
 import { parseSinceArg } from './lib/undeterminedSummary';
+import { parseJstDateTime } from './lib/rateWindows';
 import { bucketDocumentType, bucketStatus } from './lib/unknownCustomerDiagnosis';
 import { isDetermined, japaneseRatio, summarizePairs, type PairRow } from './lib/abCompare';
 
@@ -151,21 +154,34 @@ async function main(): Promise<void> {
 
   const sinceMs = parseSinceArg(getArg('--since'));
   const group = getArg('--group');
-  if (sinceMs === null || (group !== 'undetermined' && group !== 'determined')) {
-    console.error('--since YYYY-MM-DD と --group undetermined|determined を指定してください');
+  if (sinceMs === null || (group !== 'undetermined' && group !== 'determined' && group !== 'reprocessed')) {
+    console.error('--since YYYY-MM-DD と --group undetermined|determined|reprocessed を指定してください');
+    process.exit(1);
+  }
+  const cutoffMs = parseJstDateTime(getArg('--cutoff'));
+  if (group === 'reprocessed' && cutoffMs === null) {
+    console.error('--group reprocessed には --cutoff YYYY-MM-DDTHH:mm(JST)が必要です');
     process.exit(1);
   }
   const query =
     group === 'undetermined'
       ? db.collection('documents').where('documentType', '==', '未判定')
       : db.collection('documents').where('status', '==', 'processed');
-  const snap = await query.select('status', 'processedAt', 'verified', 'documentType', 'fileUrl', 'mimeType', 'totalPages').limit(20000).get();
+  const snap = await query
+    .select('status', 'processedAt', 'verified', 'documentType', 'fileUrl', 'mimeType', 'totalPages', 'ocrExtraction.extractedAt')
+    .limit(20000)
+    .get();
   const toMs = (v: unknown): number | null => (v && typeof (v as admin.firestore.Timestamp).toMillis === 'function' ? (v as admin.firestore.Timestamp).toMillis() : null);
   const targets = snap.docs
     .filter((d) => {
       const x = d.data();
       const ms = toMs(x.processedAt);
       if (bucketStatus(x.status) !== 'processed' || x.verified === true || ms === null || ms < sinceMs) return false;
+      if (group === 'reprocessed') {
+        // 取り込みは補正反映前、OCRの読み直しは反映後
+        const extractedMs = toMs(x.ocrExtraction?.extractedAt);
+        return extractedMs !== null && ms < (cutoffMs as number) && extractedMs >= (cutoffMs as number);
+      }
       return group === 'undetermined' ? bucketDocumentType(x.documentType) === 'undetermined' : bucketDocumentType(x.documentType) !== 'undetermined';
     })
     .slice(0, limit);
