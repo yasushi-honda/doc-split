@@ -70,6 +70,8 @@ llama.cppが返しうるのは503(`Loading model`または`no slot available`)�
 
 実測値ベースの試算では、モデル(mmap、3.32GiB)+ KV cache(n_ctx=8192・f16で約1.28GiB)+ compute buffer等(約1GiB)の合計は**約5〜6GiB**。Cloud Runの32GiBは8vCPUにおける設定上の最大値であって必要量ではない。**PR1では32GiBを据え置く**(PR0実測条件の再現性を保つため)。削減はPR2以降で実peak RSSを計測してから判断すること。無検証での削減/「32GiBのままでよい」という固定化のどちらも避けること。
 
+**実測(2026-11-09、dev、Cloud Monitoring `container/memory/utilizations`)**: `sarashina-summary-verify`(`--docs=D4,D8 --runs=2 --smoke=true`、run `42594560148`)の実行中、1分ごとのp99の最大は**約6%(32GiB中の約1.9GiB)**。待機中は約3.5〜4%(約1.1〜1.3GiB)。上の試算(5〜6GiB)より低い。限界: 目盛りは1%刻み(約0.3GiB)、1分未満の瞬間ピークは取りこぼしうる、mmapしたモデルのページがこのメトリクスにどこまで含まれるか未確認、計測は1回でD4(約1万字)がn_ctx上限に届いていない可能性がある。kanameoneは直近45日で成功した要約が2026-10-04の14件のみで、本番の実測はできなかった。**結論: 32GiBは過剰だが、本番の利用が少なく(min-instances未設定=処理中のみ課金)、削減額は小さい見込みのため、現時点では据え置く。** 削減を再検討するのは要約の利用が増えたとき。その場合は、8vCPUに対するCloud Runのメモリ下限を公式で確認し、devで下げて`sarashina-summary-verify`を全文書で再実行して品質を確認してから展開する。
+
 ## Cloud Run設定(PR1c確定値)
 
 | 項目 | 値 | 根拠 |
