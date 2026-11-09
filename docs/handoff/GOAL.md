@@ -189,8 +189,8 @@ plan mode(`~/.claude/plans/serialized-brewing-swing.md`、`/plan-crossreview`3�
 - [x] S9(Wave2拡張、2026-09-30。D4/D5/D6/D7=done・D9/D10=skipped・D1=fabrication_suspected誤検知〔「持つ訪問看護」、動詞を核と誤判定〕。ADR-0027「PR5実機観測」節8・9参照)
 - [x] D1誤検知への運用側の構造対応(fabrication_suspectedの総試行上限内再試行、疑い名を保存しない診断情報、検知/終端errorの観測分離。2026-09-30、`/plan-crossreview`反映、ADR-0027「PR5実機観測」節10〜12)
 - [x] 修正デプロイ後のdev実機smoke観測(2026-09-30。D1は1回目でdone、誤検知は再現せず・再試行の実機発火は未観測、修正版の稼働と観測ジョブ④の新行は確認。観察記録であり受入証明ではない。ADR-0027「PR5実機観測」節12)
-- [ ] スキャナ本体(候補抽出・原典照合)の再設計要否の判断(再試行化と診断情報で集まる誤検知データを見て別途判断、PR6前に要否のみ確定)
-- [ ] S10(ロールバック、canary全件が終端状態になったため実施可否をdecision-makerが判断)
+- 【条件待ちへ移動・2026-11-09、decision-maker合意】スキャナ本体(候補抽出・原典照合)の再設計要否の判断。trigger=本番で`fabrication_suspected`により書類が`error`になった、または`stats.fabricationRetried`が発生した時(そのデータ・構造化ログ・`summaryError`のsuffix/coreLenを見て要否のみ判断)。移動の理由: 本番の要約利用が直近45日でkanameoneの成功14件(2026-10-04)のみで、判断に必要なデータが集まっていない。未完了チェックボックスとしては持たない
+- 【取り下げ・2026-11-09、decision-maker合意】~~S10(ロールバック手順の実機確認)~~。理由: ①戻し先のGemini経路は撤去済み(ADR-0029、PR-E)で、ロールバックの前提が無い ②「dev以外への展開(PR6)は未承認」という前提も古い。kanameoneの本番`generateSummaryBatch`・`regenerateSummary`は`SUMMARY_PROVIDER=sarashina`で稼働(`gcloud functions describe`で2026-11-09に直接確認、`GEMINI`系の環境変数なし、`updateTime`=2026-11-04)
 - [x] S11(結果記録、ADR-0027「PR5実機観測」節追記済み・2026-09-29。S9/S10の結果は判断後に追記)
 
 **次の一手(トリガー付き)**: ①スキャナ本体の再設計要否は、実運用で誤検知が発生した際に`stats.fabricationRetried`・構造化ログ・`summaryError`(suffix/coreLen)で集まるデータを見て判断する(PR6前に要否のみ確定)。②S10(ロールバック)・PR6(dev以外展開)はdecision-makerの指示があるまで開始しない(4原則§1)。
