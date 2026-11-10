@@ -1,5 +1,5 @@
 ---
-updated: 2026-10-26
+updated: 2026-11-11
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -16,7 +16,21 @@ updated: 2026-10-26
 
 **未確認**: 停止後の実際の請求額の推移(trigger=次回の請求確認)。クライアントへの停止連絡の要否・実施状況は不明。
 
-## 【進行中・2026-10-06開始】Gemini完全廃止(緊急用OCR経路も含めて使わない)。承認済み計画: `/Users/yyyhhh/.claude/plans/humble-conjuring-parasol.md`、決定記録: `docs/adr/0029-gemini-full-removal.md`
+## 現在のミッション【進行中・2026-11-11開始】複数名が載るFAXの手動複製ボタン(決定記録: `docs/adr/0032-manual-fax-duplication.md`、承認済み計画: `/Users/yyyhhh/.claude/plans/bubbly-swimming-hopcroft.md`)
+
+先方(kanameone)の依頼で、1枚のFAXに載る最大3名分を、詳細画面の「他の利用者用に複製」ボタンで利用者別の書類に増やす(元の書類は今の利用者のまま、グループ合計最大5名、全テナントの基本機能、自動複製は戻さない)。**仕様案は2026-11-11に先方へ送付済み。先方(かなめ様)の了承が出るまで実装に着手しない**。
+**同姓同名の件**(先方の依頼の2点目)は、マスターの確認結果と確認依頼を同じ送付に含めた。整理(重複マスターの統合など)は、先方の確認結果を待ってから、番号単位の承認後に行う。
+
+**完了の定義**:
+- [ ] 先方(かなめ様)が仕様案に了承した(証明: 先方の返信。trigger=返信)
+- [ ] 同じ入力で2回呼んでも2回目は全件skippedでdocが増えない(証明: `cd functions && PATH=/opt/homebrew/opt/node@20/bin:$PATH npx mocha --require ts-node/register test/duplicateDocumentForCustomersIntegration.test.ts` → 「冪等」「同時実行」のケースがpass、emulator起動が必要)
+- [ ] 複製したdocが、元の確認状態を引き継がず未確認で初期化され、Drive出力系・分割系が入らず、`processedAt`・`totalPages`が入っている(証明: `functions/test/manualDuplicationBuilder.test.ts`の全項目照合がpass)
+- [ ] 複製した書類がdevの一覧に表示され、A/B/Cそれぞれの期待フォルダにDrive出力される(証明: Playwrightのスクリーンショットを PRに添付し`ui-verified`ラベル)
+- [ ] 新しい統合テストが`ci.yml`で実行される(証明: PRのCIログに該当テスト名が出る)
+- [ ] dev→kanameoneへ反映(`/deploy`、番号単位の承認)
+- [ ] 同姓同名の整理(先方の確認結果を待つ。下記「🔄 中断点」参照)
+
+## 【条件待ち・旧ミッション】Gemini完全廃止(緊急用OCR経路も含めて使わない)。承認済み計画: `/Users/yyyhhh/.claude/plans/humble-conjuring-parasol.md`、決定記録: `docs/adr/0029-gemini-full-removal.md`(2026-11-11に上の新ミッションへ置換。残件は下の「🔄 中断点」と本節を参照)
 
 **ミッション**: DocSplit本番のGemini(Vertex AI)を、緊急用OCR経路を含めて完全に廃止する(decision-maker決定、2026-10-06)。根拠: 東京の従量課金は公式モデルページでStandard PayGoの対象外(globalとus/euのみ、東京はSingle Zone Provisioned Throughputのみ)で公式サポート外、要配慮個人情報を扱う方針、緊急利用の実績は3環境とも0件、OCRは非同期で書類は失われない。
 
@@ -335,7 +349,7 @@ Gemini(Vertex AI日本リージョン非公式動作)からの移行として、
 
 **現在のミッション（下記「現在のミッション」節、Google Drive連携）との関係**: 完全に独立した並行トラック。優先度判断はdecision-maker領分。
 
-## 現在のミッション【進行中・2026-10-06開始】Gemini完全廃止(緊急用OCR経路も含めて使わない)
+## 旧ミッション【条件待ち・2026-10-06開始】Gemini完全廃止(緊急用OCR経路も含めて使わない)
 
 コード撤去と3環境への展開は2026-10-07に完了(PR #1137・#1138・#1139マージ)。**GCP側の無効化(3環境)まで完了(2026-10-08)。2026-10-09にkanameone・cocoroの新規書類(314件・15件)が全てPaddleで処理されていることを確認済み。残りは、クライアント向け文言の最終確認(decision-maker)と、「滞留が増えていない」の展開前後比較(展開前の件数が無く未実施)**。同日、Paddleの高画素数画像でのメモリ不足(kanameoneの`error`1件)を原因確定・対策・3環境展開・実書類での再処理成功まで完了(上記「Paddle運用上の発見」)。詳細・完了の定義・証明コマンドは本ファイル冒頭の「Gemini完全廃止」節、決定記録は`docs/adr/0029-gemini-full-removal.md`。
 
@@ -408,6 +422,8 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 - [x] 【対応不要】[PLAUSIBLE、現状実害なし] useRetryDriveExportのonSuccessが`['document', docId]`クエリを無効化しておらず将来的にDrive状態を読むuseDocument(docId)呼び出しが古いキャッシュを表示しうる（frontend/src/hooks/useDriveExportErrors.ts:86。現時点でuseDocument(docId)の唯一の呼び出し元DocumentDetailModal.tsxはDrive系フィールドを読んでいないため実害なし）
 
 ## 🔄 中断点（in-flight）
+
+**複数名FAXの手動複製ボタン・同姓同名の件(2026-11-11、LATEST.md冒頭・ADR-0032参照)**: 仕様案とマスターの確認結果をPDFにまとめ、決裁者が先方へ送付済み(返信待ち)。実装は未着手(コード変更なし)。**再開点**: 先方の返信を受けたら、①仕様案への了承が出たらADR-0032のStatusをAcceptedにし、feature ブランチで実装に着手(テスト先行、型→BE→FE。実装前に、既存の自動複製の書き込み`ocrProcessor.ts:895-925`と`Document`型の必須項目を突き合わせる) ②同姓同名: 先方の確認(担当が同じ2件が同じ利用者かどうか、もう一方の利用者の登録経緯)を受けて、重複マスターの統合方針を決裁者と相談(書類の付け替えを伴うため、番号単位の承認後に実行)。検証コマンド: `gh pr list --state open` / `ls docs/adr/0032-manual-fax-duplication.md`。**現在の状態は読み取り確認済み(2026-11-10、本番マスターの件数・フラグのみ。実名・IDは公開リポジトリに書かない)**: 同姓同名の2名分のマスターは、一方が3件(うち担当CMが同じ2件が二重登録の疑い)、他方が2件(どちらも同じ担当CM、契約終了のものはなし、先方が言う「別のCM担当」のマスターは見当たらない)。
 
 **「顧客」→「利用者」の表記統一(2026-10-29、LATEST.md冒頭参照)**: PR #1196をdev・kanameoneへ反映済み、先方への返信はdecision-makerが送付済み。`/deploy`には「dev検証完了の定義」を追加(PR #1197)。判断待ちだった2件は決定済み(①保存済みの旧Drive エラー文は表示時の変換を足さず、再エクスポートでの解消を待つ ②`/deploy`は「本番での画面操作は基本行わず、dev検証完了の定義を満たしたうえで配信物の照合で確認する」に統一)。残りは、先方から「顧客」の文字が残る箇所の連絡があった場合の対応(trigger)のみ。AI側の即着手作業はなし。
 
