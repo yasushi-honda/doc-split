@@ -86,3 +86,44 @@ export function matchRowsById<T extends CsvRowWithId>(
 
   return { idMatchRows, remainingRows, duplicateIds }
 }
+
+/**
+ * 同名の既存レコードが複数あるとき、CSV行(名前以外の列)に最も合う1件を選ぶ。
+ *
+ * 従来は、同名の既存を氏名キーのMapに入れる際に最後の1件だけが残り、CSV行はその1件とだけ
+ * 比較されていた。このため、すでにいる人の行でも、最後の1件と違えば「完全一致」にならず、
+ * 同名が複数あるときの既定(追加)で新規マスターとして二重登録されうる。
+ *
+ * - 空欄セルは比較から除く(空欄=変更しない、のため。CsvImportModalの完全一致判定と揃える)
+ * - 一致した列の数が最大の既存を選ぶ(CSV行の値のある列が全て一致する既存があれば、それが最大になる)
+ * - 同点なら後ろの候補(従来の「最後の1件」と同じ。同点のとき従来の挙動を変えない)
+ * - 候補が1件・0件のときは、一致の有無にかかわらず従来どおり(1件ならそれ、0件ならundefined)
+ *
+ * @param candidates 同名の既存レコード(取得順)
+ * @param csvRow CSV行。compareKeysの値を比較する
+ * @param compareKeys 比較する列名(名前は全候補で同じなので含めない)
+ */
+export function pickBestExistingForCsvRow<E extends { id: string }>(
+  candidates: readonly E[],
+  csvRow: Readonly<Record<string, unknown>>,
+  compareKeys: readonly string[]
+): E | undefined {
+  if (candidates.length <= 1) return candidates[0]
+
+  const csvValues = compareKeys
+    .map(key => [key, String(csvRow[key] ?? '').trim()] as const)
+    .filter(([, value]) => value !== '')
+
+  let best: E | undefined
+  let bestScore = -1
+  for (const candidate of candidates) {
+    const record = candidate as unknown as Record<string, unknown>
+    const score = csvValues.filter(([key, value]) => String(record[key] ?? '').trim() === value).length
+    // 同点は後ろの候補を優先する(>=)。従来の「最後の1件」と同じ結果になる
+    if (score >= bestScore) {
+      best = candidate
+      bestScore = score
+    }
+  }
+  return best
+}

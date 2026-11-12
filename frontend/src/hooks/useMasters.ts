@@ -29,6 +29,7 @@ import type {
 import { validateOfficeMasterImport } from '@shared/officeMasterValidation'
 import { findSameNameCollisionNames } from '@shared/customerIdentity'
 import { buildContractEndedLookup, type ContractEndedLookup } from '@/lib/contractEnded'
+import { pickBestExistingForCsvRow } from '@/lib/csvImportMatching'
 
 // 重複エラークラス
 export class DuplicateError extends Error {
@@ -1103,13 +1104,15 @@ export async function checkCustomerDuplicatesWithDetails(
   items: { name: string; furigana: string; careManagerName?: string; notes?: string; aliases?: string }[]
 ): Promise<DuplicateCheckResultWithDetails<{ name: string; furigana: string; careManagerName?: string; notes?: string; aliases?: string; id?: string }>[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
-  const existingMap = new Map<string, { name: string; furigana: string; careManagerName?: string; notes?: string; aliases?: string; id: string }>()
-  const sameNameCounts = new Map<string, number>()
+  type ExistingCustomer = { name: string; furigana: string; careManagerName?: string; notes?: string; aliases?: string; id: string }
+  // 同名の既存は全件を保持する(氏名キーで1件に畳むと、最後の1件だけが照合対象になり、すでにいる人の行でも
+  // 完全一致にならず、同名が複数あるときの既定(追加)で二重登録されうる)
+  const existingByName = new Map<string, ExistingCustomer[]>()
 
   snapshot.docs.forEach(d => {
     const data = d.data()
-    sameNameCounts.set(data.name, (sameNameCounts.get(data.name) ?? 0) + 1)
-    existingMap.set(data.name, {
+    const list = existingByName.get(data.name) ?? []
+    list.push({
       name: data.name,
       furigana: data.furigana || '',
       careManagerName: data.careManagerName || '',
@@ -1117,22 +1120,25 @@ export async function checkCustomerDuplicatesWithDetails(
       aliases: Array.isArray(data.aliases) ? data.aliases.join('|') : '',
       id: d.id,
     })
+    existingByName.set(data.name, list)
   })
 
   return items.map(item => {
     const normalizedName = normalizeName(item.name)
-    const existing = existingMap.get(normalizedName)
+    const csvData = {
+      name: normalizedName,
+      furigana: item.furigana,
+      careManagerName: item.careManagerName || '',
+      notes: item.notes || '',
+      aliases: item.aliases || '',
+    }
+    const candidates = existingByName.get(normalizedName) ?? []
+    const existing = pickBestExistingForCsvRow(candidates, csvData, ['furigana', 'careManagerName', 'notes', 'aliases'])
     return {
-      csvData: {
-        name: normalizedName,
-        furigana: item.furigana,
-        careManagerName: item.careManagerName || '',
-        notes: item.notes || '',
-        aliases: item.aliases || '',
-      },
+      csvData,
       existingData: existing || null,
       isDuplicate: !!existing,
-      sameNameExistingCount: sameNameCounts.get(normalizedName) ?? 0,
+      sameNameExistingCount: candidates.length,
     }
   })
 }
@@ -1143,34 +1149,38 @@ export async function checkOfficeDuplicatesWithDetails(
   items: { name: string; shortName: string; notes?: string; aliases?: string }[]
 ): Promise<DuplicateCheckResultWithDetails<{ name: string; shortName: string; notes?: string; aliases?: string; id?: string }>[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
-  const existingMap = new Map<string, { name: string; shortName: string; notes?: string; aliases?: string; id: string }>()
-  const sameNameCounts = new Map<string, number>()
+  type ExistingOffice = { name: string; shortName: string; notes?: string; aliases?: string; id: string }
+  // 顧客と同じく、同名の既存は全件を保持し、CSV行に最も合う1件と照合する
+  const existingByName = new Map<string, ExistingOffice[]>()
 
   snapshot.docs.forEach(d => {
     const data = d.data()
-    sameNameCounts.set(data.name, (sameNameCounts.get(data.name) ?? 0) + 1)
-    existingMap.set(data.name, {
+    const list = existingByName.get(data.name) ?? []
+    list.push({
       name: data.name,
       shortName: data.shortName || '',
       notes: data.notes || '',
       aliases: Array.isArray(data.aliases) ? data.aliases.join('|') : '',
       id: d.id,
     })
+    existingByName.set(data.name, list)
   })
 
   return items.map(item => {
     const normalizedName = normalizeName(item.name)
-    const existing = existingMap.get(normalizedName)
+    const csvData = {
+      name: normalizedName,
+      shortName: item.shortName || '',
+      notes: item.notes || '',
+      aliases: item.aliases || '',
+    }
+    const candidates = existingByName.get(normalizedName) ?? []
+    const existing = pickBestExistingForCsvRow(candidates, csvData, ['shortName', 'notes', 'aliases'])
     return {
-      csvData: {
-        name: normalizedName,
-        shortName: item.shortName || '',
-        notes: item.notes || '',
-        aliases: item.aliases || '',
-      },
+      csvData,
       existingData: existing || null,
       isDuplicate: !!existing,
-      sameNameExistingCount: sameNameCounts.get(normalizedName) ?? 0,
+      sameNameExistingCount: candidates.length,
     }
   })
 }

@@ -3,7 +3,12 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { matchRowsById, type CsvRowWithId, type ExistingRecordWithId } from '../csvImportMatching'
+import {
+  matchRowsById,
+  pickBestExistingForCsvRow,
+  type CsvRowWithId,
+  type ExistingRecordWithId,
+} from '../csvImportMatching'
 
 interface Row extends CsvRowWithId {
   notes?: string
@@ -79,5 +84,60 @@ describe('matchRowsById', () => {
     expect(result.idMatchRows[0]?.existing.id).toBe('cust-2')
     expect(result.remainingRows).toHaveLength(2)
     expect(result.duplicateIds).toEqual(['cust-1'])
+  })
+})
+
+describe('pickBestExistingForCsvRow(同名の既存が複数あるとき、CSV行に最も合う既存を選ぶ)', () => {
+  // 同姓同名3件(架空)。担当ケアマネ・備考・フリガナで区別する。配列の順は取得順(後ろが「最後の1件」)
+  const a = { id: 'a', name: '架空太郎', furigana: 'かくうたろう', careManagerName: '担当甲', notes: '(旧)', aliases: '' }
+  const b = { id: 'b', name: '架空太郎', furigana: 'かくうたろう', careManagerName: '担当乙', notes: '', aliases: '' }
+  const c = { id: 'c', name: '架空太郎', furigana: 'かくうたろう', careManagerName: '担当丙', notes: '(現)', aliases: '' }
+  const keys = ['furigana', 'careManagerName', 'notes', 'aliases'] as const
+
+  it('候補が空ならundefined', () => {
+    expect(pickBestExistingForCsvRow([], { careManagerName: '担当甲' }, keys)).toBeUndefined()
+  })
+
+  it('候補が1件ならそれを返す(CSV行が一致しなくても。従来どおり)', () => {
+    expect(pickBestExistingForCsvRow([a], { careManagerName: '担当乙' }, keys)?.id).toBe('a')
+  })
+
+  it('最後以外の候補と全項目一致するなら、それを選ぶ(既存の人を新規追加にしない)', () => {
+    const row = { furigana: 'かくうたろう', careManagerName: '担当甲', notes: '(旧)', aliases: '' }
+    expect(pickBestExistingForCsvRow([a, b, c], row, keys)?.id).toBe('a')
+  })
+
+  it('途中の候補とだけ一致するなら、その候補を選ぶ', () => {
+    const row = { furigana: 'かくうたろう', careManagerName: '担当乙', notes: '', aliases: '' }
+    expect(pickBestExistingForCsvRow([a, b, c], row, keys)?.id).toBe('b')
+  })
+
+  it('完全一致が無ければ、一致する項目が最も多い候補を選ぶ', () => {
+    // フリガナと担当が一致するaが2項目一致で最多(b・cはフリガナだけの1項目)
+    const row = { furigana: 'かくうたろう', careManagerName: '担当甲', notes: '(別の備考)', aliases: '' }
+    expect(pickBestExistingForCsvRow([a, b, c], row, keys)?.id).toBe('a')
+  })
+
+  it('どの候補とも同じだけ一致するなら、後ろの候補(従来の「最後の1件」と同じ)を選ぶ', () => {
+    const row = { furigana: 'かくうたろう', careManagerName: '担当丁', notes: '', aliases: '' }
+    expect(pickBestExistingForCsvRow([a, b, c], row, keys)?.id).toBe('c')
+  })
+
+  it('空欄セルは比較から除く(空欄=変更しない)。名前だけの行は、全候補が一致扱いで後ろを選ぶ', () => {
+    expect(pickBestExistingForCsvRow([a, b, c], { furigana: '', careManagerName: '', notes: '', aliases: '' }, keys)?.id).toBe('c')
+  })
+
+  it('空欄の項目は無視し、値のある項目だけで選ぶ(担当だけ指定された行)', () => {
+    expect(pickBestExistingForCsvRow([a, b, c], { careManagerName: '担当乙' }, keys)?.id).toBe('b')
+  })
+
+  it('前後の空白は無視して比較する', () => {
+    expect(pickBestExistingForCsvRow([a, b, c], { careManagerName: '  担当甲  ' }, keys)?.id).toBe('a')
+  })
+
+  it('既存側が未設定(undefined)の項目は空文字として扱う', () => {
+    const noCm = { id: 'x', name: '架空太郎' } as { id: string; name: string; careManagerName?: string }
+    const hasCm = { id: 'y', name: '架空太郎', careManagerName: '担当甲' }
+    expect(pickBestExistingForCsvRow([hasCm, noCm], { careManagerName: '担当甲' }, ['careManagerName'])?.id).toBe('y')
   })
 })
