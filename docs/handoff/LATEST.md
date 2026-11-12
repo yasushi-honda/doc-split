@@ -16,11 +16,14 @@
 - **文書**: ADR-0032(Accepted、「実装時の確認結果」を追記)、`docs/context/data-model.md`、`docs/operation/user-guide.md`、`docs/api-reference.md`。
 
 ### 検証(2026-11-12、最終コードで再実行)
-- functions: `tsc --noEmit` 終了0、`npm test`(Node 20)2596件pass・0件fail(6 pendingは既存)、新しい統合テスト(`firebase emulators:exec --only firestore`)44件pass。
-- frontend: `tsc --noEmit` 終了0、vitest 66ファイル/1028件pass、`npm run lint` 終了0(既存の警告1件)。
+- functions: `tsc --noEmit` 終了0、`npm test`(Node 20)2605件pass・0件fail(6 pendingは既存)、新しい統合テスト(`firebase emulators:exec --only firestore`)55件pass、lint 0エラー(警告113件は変更前と同数)。
+- frontend: `tsc --noEmit` 終了0、vitest 66ファイル/1051件pass、`npm run lint` 終了0(既存の警告1件)、`npm run build` 終了0。
 - **実画面(ローカルemulator+vite+Playwright MCP、本番・devには触れていない)**: 候補欄・検索・同姓同名の見分け・2名複製・同じ人の再選択(すでに作成済み)・未確定の元の書類の拒否・モバイル幅375pxを確認。複製docはemulatorのFirestoreをREST取得して、ID・利用者・`verified:false`・`processedAt`・`totalPages`・`displayFileName`・写さない項目の不在・`detail/main`の複製・元の書類の不変を照合した。詳細画面の「同一FAXをN名に配信」は複製後に更新される(兄弟数のキャッシュ無効化)。
-- **codex review 2回(1ブランチ上限)**: 1回目の指摘2件を検証して反映(P2=未確定の元の書類の複製を拒否、P3=兄弟数のキャッシュ無効化)。2回目の結果は下の「2回目のcodex review」に記載。
+- **codex review 2回(1ブランチ上限、使い切り)**: 1回目の指摘2件を検証して反映(P2=未確定の元の書類の複製を拒否、P3=兄弟数のキャッシュ無効化)。**2回目は指摘0件**(codex側のsandboxでは統合テストが動かなかったため、統合テストは自分のローカルで確認)。
+- **追加レビュー(pr-review-toolkit 3エージェント、sonnet、読み取り専用、仕様ADR-0032に照らす)**: 失敗経路(6件)・仕様適合(5件)・テスト網羅(11件)。指摘は仮説として扱い、コードで確かめてから反映した(コミット`3fae7baa`)。反映: commit結果が不明な失敗ではOCR全文を削除しない(変異テストで感度確認)、OCR全文のコピー失敗を原因の分かる`failed-precondition`+構造化ログに、付け替えられた複製を`reassigned`で返す、拒否理由ごとの文言、`displayFileName`の日付を`fileDate`(日本時間)優先に(手編集は`fileDate`しか更新しない)、一覧の「複数名の可能性のみ」フィルタをバッジと同じ関数に(複製済みの元の書類が残っていた)、未確定書類は押す前に案内、マスター読み込み失敗を「該当なし」に見せない、結果不明のエラーでキャッシュ更新、テストの拡充。**見送り**: `DocumentDetailModal`の`canDuplicate`の単体テスト(テストファイルが存在しない。実画面で確認済み)、Storageの実体(`defaultDeps.deleteOcrResult`のURL変換)のテスト(CIのemulatorはFirestoreのみ)、再試行をまたぐ`copiedOcrUrls`の上書き(再処理が再試行の間に完了する必要があり極めてまれ)。**未実施(要・本番の読み取り)**: `customerConfirmed===true`が本番の処理済み書類のどれだけで成り立つかの集計(kanameone反映前に確認する、ADR-0032)。
 - 注意: コミット後のhook(`PostToolUse`)のtest stepは、既定のNode v26でmochaが起動できず(`require is not defined in ES module scope`)失敗表示になる。コードの問題ではなく環境の問題(Node 20で全件passを別途確認済み)。hookは変更していない。
+
+- **実画面の再確認(レビュー指摘の反映後、2026-11-12)**: ローカルemulatorで再度、2名の複製(成功)・付け替えた複製を選び直したときの「付け替えられています。削除してから複製してください」の案内・未確定の元の書類での案内と「複製する」の無効化を確認(「ADC検出で、emulatorに無いサービスは本番にアクセスする」警告が出るため、シードにOCR全文のURLは入れていない)。
 
 ### 実画面の確認で見つかった問題(統合テストでは見えなかった)
 - functions emulatorのランタイムは`admin.firestore`をスタブ化し、`admin.firestore.FieldValue`が`undefined`になる。複製の呼び出しが500で失敗した。他モジュール(`masterOperations.ts`等)と同じモジュラー形式(`import { FieldValue } from 'firebase-admin/firestore'`)に直して解消。統合テストは`executeManualDuplication`を直接呼ぶためonCall経路のemulatorランタイムを通らなかった。
@@ -30,7 +33,9 @@
 - **元の書類は`customerConfirmed===true`が必須**(Drive出力のゲートより厳しい)。OCRが曖昧で未確定のまま残った書類は、詳細画面で利用者を確定してから複製する。
 - **同姓同名マスターがあるとOCRは先頭のマスターを自動で入れるが、必ず未確定になる**(実関数を架空データで実測、`isDuplicate`フラグの有無によらない)。先方へ説明済みの内容と一致。
 - 複製は要約を写さない(元の利用者名を含みうるため)。必要なら複製した書類で手動で再生成する。
-- 補償削除の理論上の限界: 同じ複製を同時に実行した2つの呼び出しの片方だけがFirestoreの書き込みで失敗すると、相手のコピーを消す余地がある(ADR-0032)。実害が出たら、削除せず孤児として残す方式へ変える。
+- 補償削除: commit結果が不明な失敗(callbackが最後まで返った後)ではOCR全文を削除せず、孤児を残して警告ログ(`compensateSkippedAmbiguousCommit`)に出す。callback途中の失敗では削除する。理論上の限界は、同じ複製を同時に実行した2つの呼び出しの片方だけがcommit前に失敗する場合(ADR-0032)。
+- 自動再実行との関係: `callFunction`は`internal`・`deadline-exceeded`を1回自動で再実行する。1回目がcommit済みで応答だけ失われた場合、2回目は全件`skipped`になり「すでに作成済みです」と表示される(実際は作成されている。冪等なので書類は増えない)。
+- 複製した書類を別の利用者に付け替えた場合、元の利用者用には作り直せない(`reassigned`の案内)。削除してから複製し直す。
 
 ### 同姓同名(先方の回答、2026-11-12。実名・IDは公開リポジトリのため書かない)
 - 利用者A: 先方の読みは「担当ケアマネXが1件・Yが2件、Yの2件は同一人物。区別用メモに入力があるほうへ合算してほしい」。**こちらの2026-11-10の確認(担当が同じ2件が二重登録の疑い・もう1件は別)とXとYの対応が食い違う**。

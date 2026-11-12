@@ -23,8 +23,8 @@ updated: 2026-11-12
 
 **完了の定義**:
 - [x] 先方(かなめ様)が仕様案に了承した(証明: 先方の返信。trigger=返信) 【2026-11-12: 窓口の担当者経由で「いただいた内容でお願いします」(複数名FAXの対応・同姓同名の件の両方)。決裁者が転送】
-- [x] 同じ入力で2回呼んでも2回目は全件skippedでdocが増えない(証明: `cd functions && PATH=/opt/homebrew/opt/node@20/bin:$PATH npx mocha --require ts-node/register test/duplicateDocumentForCustomersIntegration.test.ts` → 「冪等」「同時実行」のケースがpass、emulator起動が必要) 【2026-11-12 最終コードで再実行: `firebase emulators:exec --only firestore`上で44件pass・0件fail。実画面(ローカルemulator+vite+Playwright)でも、同じ人を選び直すと「すでに作成済みです」と出て書類が3件のまま増えないことを確認。CIでの実行は下の項目】
-- [x] 複製したdocが、元の確認状態を引き継がず未確認で初期化され、Drive出力系・分割系が入らず、`processedAt`・`totalPages`が入っている(証明: `functions/test/manualDuplicationBuilder.test.ts`の全項目照合がpass) 【2026-11-12 最終コードで再実行: `npm test`(functions、Node 20)2596件pass・0件fail。builderの37件を含む。実画面のemulatorでも、複製docに`verified:false`・`processedAt`・`totalPages`が入り、Drive出力系・分割系・`customerCandidates`・要約が無いことをREST取得で確認】
+- [x] 同じ入力で2回呼んでも2回目は全件skippedでdocが増えない(証明: `cd functions && PATH=/opt/homebrew/opt/node@20/bin:$PATH npx mocha --require ts-node/register test/duplicateDocumentForCustomersIntegration.test.ts` → 「冪等」「同時実行」のケースがpass、emulator起動が必要) 【2026-11-12 最終コードで再実行: `firebase emulators:exec --only firestore`上で55件pass・0件fail。実画面(ローカルemulator+vite+Playwright)でも、同じ人を選び直すと「すでに作成済みです」と出て書類が3件のまま増えないことを確認。CIでの実行は下の項目】
+- [x] 複製したdocが、元の確認状態を引き継がず未確認で初期化され、Drive出力系・分割系が入らず、`processedAt`・`totalPages`が入っている(証明: `functions/test/manualDuplicationBuilder.test.ts`の全項目照合がpass) 【2026-11-12 最終コードで再実行: `npm test`(functions、Node 20)2605件pass・0件fail。builderの46件を含む。実画面のemulatorでも、複製docに`verified:false`・`processedAt`・`totalPages`が入り、Drive出力系・分割系・`customerCandidates`・要約が無いことをREST取得で確認】
 - [ ] 複製した書類がdevの一覧に表示され、A/B/Cそれぞれの期待フォルダにDrive出力される(証明: Playwrightのスクリーンショットを PRに添付し`ui-verified`ラベル) 【2026-11-12 一部確認(ローカルemulator、dev未反映): 複製2件が一覧に「完了」・担当CM付きで表示され、検索結果・全書類数にも反映、モバイル幅(375px)・同姓同名の見分け・未確定書類の拒否の表示も確認。**Drive出力(利用者別フォルダ)は未確認**(emulatorにDrive連携が無いため、devへ反映後に確認する)。`ui-verified`ラベルはPR作成後】
 - [ ] 新しい統合テストが`ci.yml`で実行される(証明: PRのCIログに該当テスト名が出る)
 - [ ] dev→kanameoneへ反映(`/deploy`、番号単位の承認)
