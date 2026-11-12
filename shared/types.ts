@@ -1031,3 +1031,32 @@ export type PdfOperation =
   | { type: 'split'; afterPageNumber: number }
   | { type: 'delete'; pageNumber: number };
 
+
+// ============================================
+// 複数名FAXの手動複製 (ADR-0032)
+// Callable `duplicateDocumentForCustomers` のリクエスト/レスポンス。FE/BEで同じ型を参照する。
+// ============================================
+
+/**
+ * 1グループ（元の書類＋複製）の合計人数の上限（decision-maker決定。先方の想定は3名）。
+ * BEはトランザクション内で強制し、FEは1回の選択数の上限（この値−1＝元の書類の分を除く）に使う。
+ */
+export const MANUAL_DUPLICATION_MAX_GROUP_SIZE = 5;
+
+/** 複製を作らなかった理由（エラーではなく「作成済み」として扱う） */
+export type ManualDuplicationSkipReason =
+  /** 決定的ID（`{元docId}_dup_{customerId}`）の書類が既にある。複製後に利用者を変えた場合も含む */
+  | 'already-exists'
+  /** 同じ配信グループに同じ利用者の書類が既にある（以前の自動複製の分を含む） */
+  | 'already-in-group';
+
+export interface DuplicateDocumentRequest {
+  documentId: string;
+  /** 複製先の利用者（マスターのID）。1回に最大4名（グループ合計は元の書類を含め5名まで） */
+  customerIds: string[];
+}
+
+export interface DuplicateDocumentResponse {
+  created: Array<{ customerId: string; documentId: string }>;
+  skipped: Array<{ customerId: string; reason: ManualDuplicationSkipReason }>;
+}

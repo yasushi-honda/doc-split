@@ -101,6 +101,7 @@ Driveフォルダのclaimのうち、人手での解決が必要な状態（`div
 |------|:----:|:----:|:----:|
 | detectSplitPoints | ✅ | ✅ | - |
 | splitPdf | ✅ | ✅ | - |
+| duplicateDocumentForCustomers | ✅ | ✅ | - |
 | rotatePdfPages | ✅ | ✅ | - |
 | uploadPdf | ✅ | ✅ | - |
 | getOcrText | ✅ | ✅ | - |
@@ -175,6 +176,34 @@ PDFを分割する。
   newDocumentIds: string[];
 }
 ```
+
+#### duplicateDocumentForCustomers
+
+複数名が載るFAXを、選んだ利用者の分だけ複製する（ADR-0032）。元の書類は変えない（`distributionId`の付与のみ）。
+
+**権限:** ホワイトリスト登録ユーザー。メンテナンスゲート（`groupAggregationGateOpen`）が閉じている間は`unavailable`。
+
+**実行できる条件:** 元の書類が`status==='processed'`・分割元でない・利用者が確定済み（Drive出力のゲートと同じ判定）。グループ合計（元の書類を含む）は最大5名。
+
+**リクエスト:**
+```typescript
+{
+  documentId: string;
+  customerIds: string[]; // 1〜4名（重複は1件にまとめる）
+}
+```
+
+**レスポンス:**
+```typescript
+{
+  created: Array<{ customerId: string; documentId: string }>;
+  skipped: Array<{ customerId: string; reason: 'already-exists' | 'already-in-group' }>;
+}
+```
+
+**エラー:** `invalid-argument`（空・不正ID・元の書類と同じ利用者・5名以上）、`not-found`（元の書類・利用者マスターが無い）、`failed-precondition`（未処理・分割元・利用者未確定・合計5名超過）。
+
+**冪等:** 複製docのIDは`{元docId}_dup_{customerId}`。同じ入力を再実行しても書類は増えず、`skipped`で返る。
 
 #### rotatePdfPages
 

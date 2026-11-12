@@ -6,7 +6,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { format } from 'date-fns'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, UserCheck, Building, Calendar, Tag, AlertCircle, Info, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle, Trash2 } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, UserCheck, Building, Calendar, Tag, AlertCircle, Info, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle, Trash2, Copy } from 'lucide-react'
 import { toast } from 'sonner'
 import { storage } from '@/lib/firebase'
 import { callFunction, getCallableErrorMessage } from '@/lib/callFunction'
@@ -26,6 +26,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Switch } from '@/components/ui/switch'
 import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
+import { DuplicateDocumentModal } from '@/components/DuplicateDocumentModal'
 import { MasterSelectField } from '@/components/MasterSelectField'
 import { ExtractionInfoPopover } from '@/components/ExtractionInfoPopover'
 import {
@@ -473,6 +474,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   })
   const resolved = resolveDetailFields(detailFields, document)
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false)
+  const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false) // 他の利用者用に複製 (ADR-0032)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [urlLoading, setUrlLoading] = useState(false)
   const [urlRefreshKey, setUrlRefreshKey] = useState(0) // URL強制リフレッシュ用
@@ -936,6 +938,12 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     document.mimeType === 'application/pdf' &&
     document.status === 'processed'
 
+  // 複製可能かどうか(処理完了済みで、分割元ではない書類)。利用者が確定済みかどうかなど、
+  // その他の実行条件はサーバー側が判定し、満たさない場合は理由をトーストで伝える (ADR-0032)
+  const canDuplicate = document &&
+    document.status === 'processed' &&
+    !document.isSplitSource
+
   // PdfSplitModal は pageResults を分割プレビュー生成に使うため、detail優先の
   // 解決値で上書きして渡す (ADR-0018 Phase D PR-D3)
   const documentForSplit = document ? { ...document, pageResults: resolved.pageResults } : document
@@ -996,14 +1004,14 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
         aria-describedby={undefined}
         onInteractOutside={(e) => {
           // ポップアップ・モーダル・確認ダイアログ表示中は外側クリックでDialogを閉じない
-          if (mobilePopup !== null || isSplitModalOpen || showReprocessDialog || showCloseDialog || showEditCloseDialog || showDownloadDialog || showDeleteDialog) {
+          if (mobilePopup !== null || isSplitModalOpen || isDuplicateModalOpen || showReprocessDialog || showCloseDialog || showEditCloseDialog || showDownloadDialog || showDeleteDialog) {
             e.preventDefault()
           } else {
             handleOpenChange(false)
           }
         }}
         onPointerDownOutside={(e) => {
-          if (mobilePopup !== null || isSplitModalOpen || showReprocessDialog || showCloseDialog || showEditCloseDialog || showDownloadDialog || showDeleteDialog) {
+          if (mobilePopup !== null || isSplitModalOpen || isDuplicateModalOpen || showReprocessDialog || showCloseDialog || showEditCloseDialog || showDownloadDialog || showDeleteDialog) {
             e.preventDefault()
           }
         }}
@@ -1082,6 +1090,18 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     >
                       <Scissors className="h-4 w-4 sm:mr-1" />
                       <span className="hidden sm:inline">PDF分割</span>
+                    </Button>
+                  )}
+                  {canDuplicate && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setIsDuplicateModalOpen(true)}
+                      disabled={isEditing}
+                      className="text-teal-700 border-teal-300 hover:bg-teal-50 disabled:opacity-40"
+                    >
+                      <Copy className="h-4 w-4 sm:mr-1" />
+                      <span className="hidden sm:inline">他の利用者用に複製</span>
                     </Button>
                   )}
                   <Button variant="outline" size="sm" onClick={handleDownload} disabled={!downloadUrl}>
@@ -1836,6 +1856,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           onSuccess={handleSplitSuccess}
           detailLoading={isDetailLoading}
           detailError={isDetailError}
+        />
+      )}
+
+      {/* 他の利用者用に複製モーダル (ADR-0032) */}
+      {document && canDuplicate && (
+        <DuplicateDocumentModal
+          document={document}
+          open={isDuplicateModalOpen}
+          onOpenChange={setIsDuplicateModalOpen}
         />
       )}
     </Dialog>

@@ -146,7 +146,7 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 
 | フィールド | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
-| distributionId | string | No | 複数顧客FAX複製機能（`faxDuplication`フラグ有効時）で、元doc・全コピーに同一値（元docのid）を付与する。`doc.id === doc.distributionId` で元doc判定。兄弟一覧は `where('distributionId','==',X)` で導出（双方向配列は削除時の孤児化を避けるため持たない）。手動分割で生成される子docへは伝播しない |
+| distributionId | string | No | 複数顧客FAX複製機能（`faxDuplication`フラグ有効時）で、元doc・全コピーに同一値（元docのid）を付与する。`doc.id === doc.distributionId` で元doc判定。兄弟一覧は `where('distributionId','==',X)` で導出（双方向配列は削除時の孤児化を避けるため持たない）。手動分割で生成される子docへは伝播しない。**手動複製(ADR-0032、`duplicateDocumentForCustomers`)も同じキーを使う**: 元docに`distributionId`が無ければ元docのidを元docにも付与し、複製doc（id=`{元docId}_dup_{customerId}`）に同じ値を入れる。グループ合計は元docを含め最大5名 |
 | multiCustomerDetected | boolean | No | 複数人記載検出機能（`multiCustomerDetection`フラグ有効時のみ書込み）。検出時true、非検出時も明示的にfalse（フィールド不在にしない）。フラグ無効テナントではキー自体が書き込まれない |
 | multiCustomerCount | number | No | `multiCustomerDetected`の元になったdistinct-exact候補数。不変条件: `multiCustomerDetected === (multiCustomerCount >= 2)` |
 

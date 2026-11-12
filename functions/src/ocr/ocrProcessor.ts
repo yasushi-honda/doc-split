@@ -1222,7 +1222,7 @@ async function saveOcrResult(docId: string, ocrRunId: string, ocrResult: string)
  * リトライ非決定だと、transaction自動リトライ時にStorageコピーだけ複数回実行され
  * 前回試行分が孤児化する)。
  */
-async function copyOcrResultForDistributionMember(
+export async function copyOcrResultForDistributionMember(
   sourceUrl: string,
   destinationKey: string,
   ocrRunId: string

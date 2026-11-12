@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-11-11)。仕様案を先方へ2026-11-11に送付済み。**先方(かなめ様)の了承が出るまで実装に着手しない**(先方の依頼が「仕様を決める→報告→着手」の順のため)。計画は plan mode で承認済み、plan-crossreview(grip + codex 2パス)を実施済み。
+Accepted (2026-11-12)。仕様案を2026-11-11に先方へ送付し、先方(かなめ様)が2026-11-12に「いただいた内容でお願いします」と了承した(窓口の担当者経由、決裁者が確認)。計画は plan mode で承認済み、plan-crossreview(grip + codex 2パス)を実施済み。実装は feature ブランチ `feature/manual-fax-duplication`。
 
 ## Context
 
@@ -43,12 +43,17 @@ kanameoneから、福祉用具貸与事業所の提供表が最大3名分で1枚
 - 元の書類の再解析の挙動が変わる(利用者が保持される)ことを、先方へ報告済み。
 - 全テナントに複製ボタンが表示される。
 
-## 未確定事項(実装中に確認し、このADRに追記する)
+## 実装時の確認結果(2026-11-12)
 
-- 分割・回転で加工済みのPDF(`processed/`配下)を複製した書類は、`provenance`がないと回転が拒否される可能性がある(`pdfOperations.ts:1080`、`genesisEligibility.ts`)。受信原本(`original/`)なら回転できる。加工済みPDFの複製で`provenance`を引き継ぐ必要があるかを確認する。
-- 削除と複製の同時実行によるPDF消失は、設計では防げない。実害は同じ数秒に重なった場合に限られると見ている。
-- 「利用者が確定済み」の判定は、既存の`precheckCustomerIdentity`/`resolveCustomerUnconfirmedReason`(`shared/customerIdentity.ts`)に揃える。条件は①利用者名が空・未判定・不明顧客でない、②`customerId`とマスター名が食い違わない、③人が確定済み(`customerConfirmed`優先)または同名衝突がない、の3点。`verified`(緑の「確認済みにする」)は条件に含めない。先方へ2026-11-11に「緑ボタンの前でも複製できる」と回答済みなので、実装でこの定義と食い違えない(回答文には②の名前とIDの食い違いは書いていない)。
-- 同姓同名の扱いで先方へ説明済みの内容(区別メモと担当CMは判定に使わない、同名で人が確定するまで未確定、未確定の間はDrive出力が止まる)は、実装時に挙動を実測して再確認する。特に、同名マスターがあってもOCRが片方を自動で選ぶ場合があるか(OCRの要選択判定は`isDuplicate`フラグまたは候補スコア差10以内で、同名の件数ではない、`extractors.ts:590-600`)と、確定後のマスター側の保存内容は、コード読みだけで未実測。
+実装中に確認した結果。計画時点の「未確定事項」を、確認できたものから順に確定させた。
+
+- **複製した書類の回転**: 複製には`provenance`・`parentDocumentId`を写さず、`isSplitSource`でもない。元のPDFが受信原本(`original/`配下)なら、既存の`isGenesisEligible`(`genesisEligibility.ts`)を満たすため回転できる。**分割・回転で加工済みのPDF(`processed/`配下)を元にした複製は、`provenance`が無く`original/`でもないため、回転が`failed-precondition`で拒否される**(`pdfOperations.ts:1080`)。`provenance`を写す案は採らない(ADR-0016: 別の書類のバイト証跡を持たせると、`rotatePdfPages`の整合性検証の前提が崩れる)。対処: 回転が必要な書類は、**複製の前に元の書類を回転しておく**(複製は回転後のPDFを共有する)。
+- **「利用者が確定済み」の判定**: Drive出力のゲートと同じ`isCustomerUnconfirmed`(`functions/src/drive/customerAmbiguityGate.ts`、内部で`shared/customerIdentity.ts`の`precheckCustomerIdentity`を使う)をそのまま呼ぶ。条件は①利用者名が空・未判定・不明顧客でない、②`customerId`とマスター名が食い違わない(`customerId`のマスターが無い場合も未確定)、③人が確定済み(`customerConfirmed`優先)または同名マスターが2件未満、の3点。`verified`は条件に含めない(先方へ「緑ボタンの前でも複製できる」と回答済みと整合)。統合テストで、未判定・名前の食い違い・同名で未確定は拒否、同名でも人が確定済みなら複製できること、`verified:false`でも複製できることを確認した。
+- **同姓同名マスターがあるときのOCRの挙動(実測)**: 実関数(`extractCustomerCandidates`)を架空データで実行した。同名マスターが2件あり、OCR全文にその名前があると、両方がスコア100の完全一致候補になり、先頭のマスターが`bestMatch`として`customerId`・`customerName`・`careManager`に**自動で入る**が、候補の差が0点のため`needsManualSelection=true`、`customerConfirmed=false`になる。**マスターの`isDuplicate`フラグの有無・値によらず同じ**(両方false/未設定でも、両方trueでも同じ結果)。同名が1件だけなら`customerConfirmed=true`。先方へ説明済みの「同名で人が確定するまで未確定、未確定の間はDrive出力が止まる」と一致する。確定後のマスター側の保存内容は、このADRの範囲外のため未実測。
+- **OCR全文のコピーと補償削除の限界**: Storageコピー後にFirestoreの書き込みが失敗した場合はコピーを削除する。ただし最終transactionのthrowは「未commitの確証」にならないため、複製docが存在し`ocrResultUrl`がコピーと一致するときは削除しない(`shouldSkipCompensatingDelete`と同じ考え方)。保存先が複製docのIDで決まるため、**同じ複製を同時に実行した2つの呼び出しの片方だけが失敗した場合**は、相手のコピーを消してしまう余地が理論上ある(両方が同時に同じ複製を作ろうとし、かつ片方が書き込みで失敗する場合に限る。孤児を残すより複製docの全文消失の方が影響が大きいため完全には塞げていない)。実害が出た場合は、削除せず孤児として残す方式へ変える。
+- **要約は写さない**: `summary*`は元の利用者名を含みうるため複製に写さない。必要なら複製した書類で要約を手動で再生成する。
+- **日付**: 保存済みの`fileDateFormatted`があれば写し、`displayFileName`は選んだ利用者名で作り直す(無ければ`fileDate`から作る)。
+- 削除と複製のほぼ同時の実行によるPDF消失は、設計では防げない(上の「保証の範囲」)。実害は同じ数秒に重なった場合に限られると見ている。
 
 ## plan-crossreview(2026-11-11)
 
