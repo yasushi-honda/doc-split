@@ -20,7 +20,12 @@ const mockCustomers: { data: CustomerMaster[] | undefined } = { data: [] }
 vi.mock('@/hooks/useMasters', () => ({
   useCustomers: () => mockCustomers,
   useDocumentTypes: () => ({ data: [], isError: false }),
-  useContractEndedLookup: () => ({ isReady: true, endedById: new Map(), fullyEndedNameKeys: new Set() }),
+  useContractEndedLookup: () => ({
+    isReady: true,
+    endedById: new Map(),
+    fullyEndedNameKeys: new Set(),
+    activeNameKeys: new Set(),
+  }),
   useSetCustomerContractEnded: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }))
 

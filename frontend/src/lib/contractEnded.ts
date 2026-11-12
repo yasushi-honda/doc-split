@@ -10,6 +10,10 @@
  * - 迷ったら表示(fail-open)。マスター未読込・表示トグルONは常に表示
  * - 確認済み/未確認(選択待ち含む)は問わず非表示にする(クライアント要望 2026-10-27。
  *   以前は未確認書類を常に表示していたが、契約終了後も一覧に残り続けるため廃止)
+ * - ただし例外: 同姓同名で契約中のマスターがあるとき、契約終了のマスターに紐づく「利用者が未確定」
+ *   (customerConfirmed !== true)の書類は隠さない。OCRは同姓同名のマスターがあると先頭の1件を自動で
+ *   入れるが必ず未確定にする(人が選んで確定する対象)ため、その先頭が契約終了のマスターだと、契約中の
+ *   方の書類が確定を待つ前に一覧から消えてしまう。全員が契約終了の氏名は従来どおり隠す
  */
 
 import type { CustomerMaster } from '@shared/types';
@@ -22,11 +26,13 @@ export interface ContractEndedLookup {
   endedById: ReadonlyMap<string, boolean>;
   /** 名前キー → その名前キーを持つ全マスターが契約終了か */
   fullyEndedNameKeys: ReadonlySet<string>;
+  /** 契約中(isContractEnded未設定を含む)のマスターが1人でもいる名前キー */
+  activeNameKeys: ReadonlySet<string>;
 }
 
 export function buildContractEndedLookup(customers: CustomerMaster[] | undefined): ContractEndedLookup {
   if (!customers) {
-    return { isReady: false, endedById: new Map(), fullyEndedNameKeys: new Set() };
+    return { isReady: false, endedById: new Map(), fullyEndedNameKeys: new Set(), activeNameKeys: new Set() };
   }
 
   const endedById = new Map<string, boolean>();
@@ -44,13 +50,16 @@ export function buildContractEndedLookup(customers: CustomerMaster[] | undefined
   }
 
   const fullyEndedNameKeys = new Set<string>();
+  const activeNameKeys = new Set<string>();
   for (const [nameKey, group] of nameKeyGroups) {
     if (group.every((c) => c.isContractEnded === true)) {
       fullyEndedNameKeys.add(nameKey);
+    } else {
+      activeNameKeys.add(nameKey);
     }
   }
 
-  return { isReady: true, endedById, fullyEndedNameKeys };
+  return { isReady: true, endedById, fullyEndedNameKeys, activeNameKeys };
 }
 
 interface ContractEndedDocLike {
@@ -58,6 +67,8 @@ interface ContractEndedDocLike {
   customerName?: string;
   customerKey?: string;
   verified?: boolean;
+  /** 利用者が確定済みか。true以外(false・未設定)は未確定として扱う */
+  customerConfirmed?: boolean;
 }
 
 export function isDocumentHiddenByContractEnd(
@@ -69,6 +80,11 @@ export function isDocumentHiddenByContractEnd(
   if (doc.customerId) {
     const isEnded = lookup.endedById.get(doc.customerId);
     if (isEnded !== undefined) {
+      if (isEnded && doc.customerConfirmed !== true) {
+        // 同姓同名で契約中のマスターがあれば、未確定の書類は隠さない(人が選んで確定する対象)
+        const sameNameKey = doc.customerKey || normalizeGroupKey(doc.customerName);
+        if (sameNameKey && lookup.activeNameKeys.has(sameNameKey)) return false;
+      }
       return isEnded;
     }
     // customerIdはあるがマスターに存在しない(削除済み等) → 名前フォールバックへ

@@ -54,6 +54,7 @@ vi.mock('@/hooks/useMasters', async (importOriginal) => {
         ['customer-active', false],
       ]),
       fullyEndedNameKeys: new Set<string>(['契約終了花子']),
+      activeNameKeys: new Set<string>(),
     }),
   }
 })
