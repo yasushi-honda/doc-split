@@ -26,7 +26,7 @@ import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
-import { formatTimestamp, formatCustomerNameForDisplay } from '@/lib/documentUtils'
+import { formatTimestamp, formatCustomerNameForDisplay, isMultiCustomerPending } from '@/lib/documentUtils'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -1048,7 +1048,8 @@ export function DocumentsPage() {
     // 初日に見たい母集団そのもの)をwhereで絞ると全件サイレント除外してしまうため
     // (showUnverifiedOnly/showSplitと同型のトレードオフを踏襲)
     if (showMultiCustomerOnly) {
-      docs = docs.filter(doc => doc.multiCustomerDetected === true)
+      // バッジと同じ条件(複製済み・配信済みの書類は、バッジが出ないので絞り込みにも残さない)
+      docs = docs.filter(isMultiCustomerPending)
     }
 
     // 担当ケアマネ不明のみ表示(Issue #1029)

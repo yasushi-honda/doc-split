@@ -168,6 +168,18 @@ jobs:
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
+      - name: Run duplicateDocumentForCustomers integration tests (Firestore emulator)
+        # ADR-0032: 複数名FAXの手動複製ボタンのサーバー側(onCall本体とトランザクション)を守る。
+        # 冪等(同じ入力2回で増えない)・同時実行で重複しない・グループ合計5名の上限・
+        # 元の書類が distributionId の付与以外変わらない・OCR全文コピー後の書き込み失敗時の補償削除。
+        # functions の `npm test` は *Integration.test.ts を除外し、CI は統合テストを個別に列挙して
+        # いる(既存の他Integration testと同じ理由)ため、専用 step として追加した。
+        run: |
+          cd functions && firebase emulators:exec --only firestore \
+            'npx mocha --require ts-node/register --timeout 15000 test/duplicateDocumentForCustomersIntegration.test.ts'
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
       - name: Run generateSummaryBatch / manual summary request integration tests (Firestore emulator)
         # PR-C: 手動依頼の登録(summaryManualRequest)も同じstepで守る(登録・冪等・L1/L2拒否)。
         # ADR-0027 PR5 D1対応: fabrication_suspectedを総試行上限内でpendingへ戻して再試行する

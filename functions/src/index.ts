@@ -53,6 +53,9 @@ export {
   rotatePdfPages,
 } from './pdf/pdfOperations';
 
+// 複数名FAXの手動複製（Callable Function, ADR-0032）
+export { duplicateDocumentForCustomers } from './documents/duplicateDocumentForCustomers';
+
 // 管理用関数（マスターデータシード等）
 export {
   seedDocumentMasters,
