@@ -209,10 +209,11 @@ describe('checkCustomerDuplicatesWithDetails(比較する項目・表記ゆれ)'
     expect(result?.csvData.aliases).toBe('丙|丁')
   })
 
-  it('フリガナが半角カナでも、書込み側と同じ正規化(全角カナ)で既存と比べる', async () => {
+  it('フリガナは整えずに比べる: 保存済みが半角カナのまま(CLI取込は整形せず保存する)でも、同じ文字列のCSV行は一致する', async () => {
+    // CSV側だけ正規化すると、保存済みと同じ文字列の行が不一致に変わり、同名複数の既定(追加)で二重登録になる
     mockGetDocs.mockResolvedValue(snapshotOf([
-      { id: 'target', data: { ...base, furigana: 'カクウタロウ' } },
-      { id: 'last', data: { ...base } },
+      { id: 'target', data: { ...base, furigana: 'ｶｸｳﾀﾛｳ' } },
+      { id: 'last', data: { ...base, furigana: 'ｶｸｳﾀﾛｳ', careManagerName: '担当乙' } },
     ]))
     const { checkCustomerDuplicatesWithDetails } = await import('../useMasters')
 
@@ -221,7 +222,9 @@ describe('checkCustomerDuplicatesWithDetails(比較する項目・表記ゆれ)'
     ])
 
     expect(result?.existingData?.id).toBe('target')
-    expect(result?.csvData.furigana).toBe('カクウタロウ')
+    // 取込モーダルの完全一致判定は csvData と existingData を文字列で比べるため、フリガナは同じ文字列のまま
+    expect(result?.csvData.furigana).toBe('ｶｸｳﾀﾛｳ')
+    expect(result?.csvData.furigana).toBe(result?.existingData?.furigana)
   })
 
   it('別表記が空欄のCSV行は、別表記の違いで候補を選ばない(空欄=変更しない)', async () => {

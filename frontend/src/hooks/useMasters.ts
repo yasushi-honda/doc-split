@@ -1125,12 +1125,14 @@ export async function checkCustomerDuplicatesWithDetails(
 
   return items.map(item => {
     const normalizedName = normalizeName(item.name)
-    // フリガナ・別表記は、書込み側と同じ整え方にして既存と比べる(保存済みの値は整形後のため、生のままだと
-    // 半角カナや `x | y` の表記ゆれだけで不一致になり、すでにいる人が二重登録されうる)。
-    // 整えた値でも書込みの結果は変わらない(書込み側が同じ整形を行う)
+    // 別表記は、書込み側と同じ整え方にして既存と比べる(保存済みの別表記は、どの保存経路でも区切り・trim・
+    // 空要素除去の済んだ形のため、生のままだと `x | y` の表記ゆれだけで不一致になり、二重登録されうる)。
+    // 整えた値でも書込みの結果は変わらない(書込み側が同じ整形を行う)。
+    // フリガナは整えず、生のまま比べる: CLIの取込(scripts/import-masters.js)は整形せず保存するため、
+    // CSV側だけ整えると、保存済みと同じ文字列の行が不一致に変わり、かえって二重登録になる
     const csvData = {
       name: normalizedName,
-      furigana: item.furigana ? normalizeName(item.furigana) : '',
+      furigana: item.furigana,
       careManagerName: item.careManagerName || '',
       notes: item.notes || '',
       aliases: canonicalizeAliasesForCompare(item.aliases),
