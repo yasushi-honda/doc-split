@@ -240,6 +240,27 @@ function dbThrowingAfterCommit(real: admin.firestore.Firestore): admin.firestore
   });
 }
 
+/**
+ * トランザクションの callback は最後まで返るが、commit は反映されない db。
+ * commit RPC がタイムアウト等で失敗し、サーバー側では後から反映される「結果不明」の状況を、
+ * 「その時点では複製docが読めない」形で再現する(commit後に1回読む判定では未commitと区別できない)。
+ */
+function dbFailingAfterCallbackBeforeCommit(real: admin.firestore.Firestore): admin.firestore.Firestore {
+  return new Proxy(real, {
+    get(target, prop) {
+      if (prop === 'runTransaction') {
+        return (cb: (tx: admin.firestore.Transaction) => Promise<unknown>, opts?: unknown) =>
+          target.runTransaction(async (tx) => {
+            await cb(tx);
+            throw new Error('injected failure after callback, before commit');
+          }, opts as never);
+      }
+      const v = (target as unknown as Record<string | symbol, unknown>)[prop];
+      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+    },
+  });
+}
+
 // ================================================================= tests
 
 describe('duplicateDocumentForCustomers 統合テスト (ADR-0032)', () => {
@@ -278,6 +299,18 @@ describe('duplicateDocumentForCustomers 統合テスト (ADR-0032)', () => {
     it('documentId が無い → invalid-argument', async () => {
       await expectHttpsError(() => callWrapped({ customerIds: ['c-a'] }), 'invalid-argument');
     });
+
+    for (const [label, documentId] of [
+      ['空文字', ''],
+      ['パス区切りを含む(別のドキュメントを指せてしまう)', 'src1/detail/main'],
+      ['文字列でない', 123],
+    ] as const) {
+      it(`documentId が${label} → invalid-argument(何も読まない)`, async () => {
+        await seedSource();
+        await expectHttpsError(() => callWrapped({ documentId, customerIds: ['c-a'] }), 'invalid-argument');
+        expect(await countDocuments()).to.equal(1);
+      });
+    }
 
     it('ログイン済みの職員(role=user)は複製できる', async () => {
       await seedSource();
@@ -342,6 +375,24 @@ describe('duplicateDocumentForCustomers 統合テスト (ADR-0032)', () => {
         expect((await db.doc('documents/src1').get()).data()).to.not.have.property('distributionId');
       });
     }
+
+    it('未確定の拒否は、詳細画面で利用者を確定するよう案内する', async () => {
+      await seedSource({ customerConfirmed: false });
+      const err = await expectHttpsError(() => run(['c-a']), 'failed-precondition');
+      expect(err.message).to.contain('詳細画面で利用者を確定');
+    });
+
+    it('元の書類の利用者IDがマスターに無い場合は、マスターに見つからない旨を伝える', async () => {
+      await seedSource({ customerId: 'c-deleted-master' });
+      const err = await expectHttpsError(() => run(['c-a']), 'failed-precondition');
+      expect(err.message).to.contain('マスターに見つかりません');
+    });
+
+    it('利用者名がマスターと食い違う場合は、食い違いを伝える(確定済みに見える書類でも原因が分かる)', async () => {
+      await seedSource({ customerName: '別の名前', customerConfirmed: true });
+      const err = await expectHttpsError(() => run(['c-a']), 'failed-precondition');
+      expect(err.message).to.contain('食い違');
+    });
 
     it('同姓同名のマスターがあり、人が確定していない → failed-precondition', async () => {
       await seedCustomer('c-src-twin', 'テスト太郎', '担当別');
@@ -567,6 +618,103 @@ describe('duplicateDocumentForCustomers 統合テスト (ADR-0032)', () => {
     });
   });
 
+  describe('OCR全文の失敗時の扱い(silent-failure レビュー)', () => {
+    it('callback は最後まで返ったが commit 結果が不明な場合は、複製docがまだ読めなくてもコピーを削除しない', async () => {
+      // 後からサーバー側で commit が反映されると、複製docは消えたオブジェクトを指すことになり、
+      // 再実行も「作成済み」で全文が作り直されない。結果不明のときは孤児を残す方を選ぶ。
+      await seedSource({ ocrResultUrl: 'gs://test-bucket/ocr-results/src1/run-a.txt' });
+      const fake = fakeDeps();
+      let caught: unknown;
+      try {
+        await run(['c-a'], { deps: fake.deps, database: dbFailingAfterCallbackBeforeCommit(db) });
+      } catch (err) {
+        caught = err;
+      }
+      expect((caught as Error).message).to.equal('injected failure after callback, before commit');
+      expect(fake.copies, '前提: コピーは行われている').to.have.length(1);
+      expect((await db.doc('documents/src1_dup_c-a').get()).exists, '前提: この時点では複製docは読めない').to.equal(false);
+      expect(fake.deleted).to.deep.equal([]);
+    });
+
+    it('補償時に複製docが既にあっても、ocrResultUrl が今回のコピーと違えば(別の実行のもの)、今回のコピーは削除する', async () => {
+      // 同じ複製を別の実行が先に作った(別の ocrRunId のコピー)場合、今回のコピーは採用されていない。
+      // トランザクションが読んだdocへ callback の内側から外で書き込むと、悲観ロックで待たされて
+      // デッドロックするため、「トランザクションが失敗して(ロックが解放された)直後」に作る。
+      await seedSource({ ocrResultUrl: 'gs://test-bucket/ocr-results/src1/run-a.txt' });
+      const fake = fakeDeps();
+      const failing = dbFailingTxSet(db, 1);
+      const database = new Proxy(failing, {
+        get(target, prop) {
+          if (prop === 'runTransaction') {
+            return async (cb: unknown, opts: unknown) => {
+              try {
+                return await (target as unknown as { runTransaction: (...a: unknown[]) => Promise<unknown> }).runTransaction(cb, opts);
+              } catch (err) {
+                await db.doc('documents/src1_dup_c-a').set({
+                  id: 'src1_dup_c-a',
+                  customerId: 'c-a',
+                  ocrResultUrl: 'gs://test-bucket/ocr-results/other-run.txt',
+                });
+                throw err;
+              }
+            };
+          }
+          const v = (target as unknown as Record<string | symbol, unknown>)[prop];
+          return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+        },
+      }) as admin.firestore.Firestore;
+
+      try {
+        await run(['c-a'], { deps: fake.deps, database });
+      } catch {
+        // 期待どおり失敗する
+      }
+      expect(fake.deleted).to.deep.equal(['gs://test-bucket/ocr-results/src1_dup_c-a/run-a.txt']);
+    });
+
+    it('補償削除が失敗しても、元のエラーを優先して返し、残りのコピーの削除も続ける', async () => {
+      await seedSource({ ocrResultUrl: 'gs://test-bucket/ocr-results/src1/run-a.txt' });
+      const fake = fakeDeps();
+      const attempted: string[] = [];
+      const deps: ManualDuplicationDeps = {
+        ...fake.deps,
+        deleteOcrResult: async (url) => {
+          attempted.push(url);
+          throw new Error('delete failed');
+        },
+      };
+      let caught: unknown;
+      try {
+        await run(['c-a', 'c-b'], { deps, database: dbFailingTxSet(db, 3) });
+      } catch (err) {
+        caught = err;
+      }
+      expect((caught as Error).message, '補償の失敗(delete failed)ではなく、元のエラーが返る').to.equal('injected write failure');
+      expect(attempted, '1件目の削除が失敗しても、2件目の削除を試みる').to.have.length(2);
+    });
+
+    it('OCR全文のコピーが失敗したら、原因が分かる failed-precondition にし、先にコピーした分は削除する', async () => {
+      await seedSource({ ocrResultUrl: 'gs://test-bucket/ocr-results/src1/run-a.txt' });
+      const fake = fakeDeps();
+      let copyCalls = 0;
+      const deps: ManualDuplicationDeps = {
+        ...fake.deps,
+        copyOcrResult: async (sourceUrl, destinationKey, ocrRunId) => {
+          copyCalls += 1;
+          if (copyCalls === 2) throw new Error('gcs: 404 No such object');
+          return fake.deps.copyOcrResult(sourceUrl, destinationKey, ocrRunId);
+        },
+      };
+
+      const err = await expectHttpsError(() => run(['c-a', 'c-b'], { deps }), 'failed-precondition');
+
+      // 汎用の internal(FEでは「電波状況を確認」)ではなく、OCR全文のコピー失敗だと分かる文言にする
+      expect(err.message).to.contain('OCR全文');
+      expect(fake.deleted).to.deep.equal(['gs://test-bucket/ocr-results/src1_dup_c-a/run-a.txt']);
+      expect(await countDocuments()).to.equal(1);
+    });
+  });
+
   // ------------------------------------------------------------ 冪等・同時実行
   describe('重複の防止(冪等・同時実行)', () => {
     it('同じ入力を2回続けて呼ぶと、2回目は全件 skipped で doc の数が増えない', async () => {
@@ -615,6 +763,15 @@ describe('duplicateDocumentForCustomers 統合テスト (ADR-0032)', () => {
 
       const again = await run(['c-a']);
       expect(again.created).to.deep.equal([]);
+      // 「作成済み」と伝えると、その利用者用の書類は実際には存在しない(別の利用者のものになっている)ため、
+      // 付け替えられていることが分かる理由で返す(FEで「削除してから複製し直す」手順を案内する)
+      expect(again.skipped).to.deep.equal([{ customerId: 'c-a', reason: 'reassigned' }]);
+    });
+
+    it('付け替えられていない既存の複製は、これまでどおり「作成済み」(already-exists)で返す', async () => {
+      await seedSource();
+      await run(['c-a']);
+      const again = await run(['c-a']);
       expect(again.skipped).to.deep.equal([{ customerId: 'c-a', reason: 'already-exists' }]);
     });
   });

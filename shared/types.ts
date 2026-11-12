@@ -1048,7 +1048,12 @@ export type ManualDuplicationSkipReason =
   /** 決定的ID（`{元docId}_dup_{customerId}`）の書類が既にある。複製後に利用者を変えた場合も含む */
   | 'already-exists'
   /** 同じ配信グループに同じ利用者の書類が既にある（以前の自動複製の分を含む） */
-  | 'already-in-group';
+  | 'already-in-group'
+  /**
+   * 決定的IDの書類はあるが、複製後に別の利用者へ付け替えられている。「作成済み」と伝えると、この利用者用の
+   * 書類は実際には存在しないため、削除してから複製し直す手順を案内できるよう別の理由で返す
+   */
+  | 'reassigned';
 
 export interface DuplicateDocumentRequest {
   documentId: string;

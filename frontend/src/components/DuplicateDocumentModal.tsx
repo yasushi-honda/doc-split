@@ -54,7 +54,7 @@ function describeCustomer(c: SelectedCustomer): string {
 }
 
 export function DuplicateDocumentModal({ document, open, onOpenChange }: DuplicateDocumentModalProps) {
-  const { data: customerMasters } = useCustomerMasters()
+  const { data: customerMasters, isError: isMasterError, isLoading: isMasterLoading } = useCustomerMasters()
   const duplicate = useDuplicateDocument()
   const [selected, setSelected] = useState<SelectedCustomer[]>([])
 
@@ -84,6 +84,9 @@ export function DuplicateDocumentModal({ document, open, onOpenChange }: Duplica
 
   const selectedIds = useMemo(() => new Set(selected.map((s) => s.id)), [selected])
   const atLimit = selected.length >= MAX_TARGETS
+  // 元の書類の利用者が確定済みであること(BEと同じ判定)。再解析で元の利用者が書き換わらないための条件で、
+  // 満たさないと複製できない。押した後のエラーで初めて知らせず、先に案内して押せなくする
+  const isSourceConfirmed = document.customerConfirmed === true
 
   // マスター検索の選択肢: 元の書類の利用者と選択済みの利用者は除く。上限に達したら出さない
   const searchItems: MasterItem[] = useMemo(() => {
@@ -137,13 +140,24 @@ export function DuplicateDocumentModal({ document, open, onOpenChange }: Duplica
         documentId: document.id,
         customerIds: selected.map((s) => s.id),
       })
-      if (result.created.length === 0) {
+      // 付け替えられた複製(reassigned)は、その利用者用の書類が実際には存在しないため「作成済み」とは
+      // 別に伝える(削除してから複製し直す手順を案内する)
+      const reassigned = result.skipped.filter((entry) => entry.reason === 'reassigned')
+      const alreadyCount = result.skipped.length - reassigned.length
+      if (result.created.length > 0) {
+        const skippedNote = alreadyCount > 0 ? `（${alreadyCount}名は作成済みのため対象外）` : ''
+        toast.success(`${result.created.length}名分の書類を複製しました${skippedNote}`)
+      } else if (alreadyCount > 0 || reassigned.length === 0) {
         // 選んだ全員が作成済み。エラーではなく、既に複製されていることを伝える
         toast.info('選んだ利用者の書類は、すでに作成済みです')
-      } else {
-        const skippedNote =
-          result.skipped.length > 0 ? `（${result.skipped.length}名は作成済みのため対象外）` : ''
-        toast.success(`${result.created.length}名分の書類を複製しました${skippedNote}`)
+      }
+      if (reassigned.length > 0) {
+        const names = reassigned
+          .map((entry) => selected.find((s) => s.id === entry.customerId)?.name ?? entry.customerId)
+          .join('・')
+        toast.warning(
+          `${names}用に作った書類は、別の利用者に付け替えられています。その書類を削除してから、もう一度複製してください`
+        )
       }
       onOpenChange(false)
     } catch (err) {
@@ -172,6 +186,12 @@ export function DuplicateDocumentModal({ document, open, onOpenChange }: Duplica
         </DialogHeader>
 
         <div className="space-y-4 text-sm">
+          {!isSourceConfirmed && (
+            <p role="alert" className="rounded border border-amber-300 bg-amber-50 p-2 text-amber-900">
+              元の書類の利用者がまだ確定していません。詳細画面で利用者を確定してから複製してください。
+            </p>
+          )}
+
           {candidates.length > 0 && (
             <section className="space-y-2">
               <h3 className="font-medium">OCRが読み取った利用者</h3>
@@ -203,13 +223,18 @@ export function DuplicateDocumentModal({ document, open, onOpenChange }: Duplica
 
           <section className="space-y-2">
             <h3 className="font-medium">ほかの利用者を探して追加</h3>
+            {isMasterError && (
+              <p role="alert" className="text-red-600">
+                利用者マスターを読み込めませんでした。画面を再読み込みしてください(OCRが読み取った候補は選べます)。
+              </p>
+            )}
             <MasterSelectField
               type="customer"
               value=""
               items={searchItems}
               onChange={handlePickFromSearch}
-              placeholder="利用者を検索して追加"
-              disabled={atLimit || isPending}
+              placeholder={isMasterLoading ? '読み込み中…' : '利用者を検索して追加'}
+              disabled={atLimit || isPending || isMasterError || isMasterLoading}
             />
           </section>
 
@@ -252,7 +277,7 @@ export function DuplicateDocumentModal({ document, open, onOpenChange }: Duplica
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>
             キャンセル
           </Button>
-          <Button onClick={handleSubmit} disabled={selected.length === 0 || isPending}>
+          <Button onClick={handleSubmit} disabled={selected.length === 0 || isPending || !isSourceConfirmed}>
             {isPending ? '複製中…' : selected.length > 0 ? `${selected.length}名分を複製する` : '複製する'}
           </Button>
         </DialogFooter>

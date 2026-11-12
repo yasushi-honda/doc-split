@@ -15,6 +15,7 @@ import {
   applySegmentFieldEdit,
   buildSegmentConfirmedFlags,
   formatCustomerNameForDisplay,
+  isMultiCustomerPending,
 } from '../documentUtils';
 
 describe('isValidCustomerSelection', () => {
@@ -257,5 +258,26 @@ describe('formatCustomerNameForDisplay', () => {
   it('null/undefinedは空文字を返す', () => {
     expect(formatCustomerNameForDisplay(null)).toBe('');
     expect(formatCustomerNameForDisplay(undefined)).toBe('');
+  });
+});
+
+describe('isMultiCustomerPending (複数名の可能性があり、まだ複製されていない書類)', () => {
+  it('検出されていて、distributionId が無ければ true', () => {
+    expect(isMultiCustomerPending({ multiCustomerDetected: true })).toBe(true);
+  });
+
+  it('検出されていても、distributionId があれば(複製済み・配信済み)false', () => {
+    // 手動複製(ADR-0032)で元の書類に distributionId が付くと、バッジは消える。
+    // 一覧の「複数名の可能性のみ」フィルタも同じ条件にしないと、複製済みの書類が残り続ける。
+    expect(isMultiCustomerPending({ multiCustomerDetected: true, distributionId: 'src1' })).toBe(false);
+  });
+
+  it('検出されていない・フィールドが無い書類は false', () => {
+    expect(isMultiCustomerPending({ multiCustomerDetected: false })).toBe(false);
+    expect(isMultiCustomerPending({})).toBe(false);
+  });
+
+  it('distributionId が空文字の書類は、付与前と同じ扱い(true)', () => {
+    expect(isMultiCustomerPending({ multiCustomerDetected: true, distributionId: '' })).toBe(true);
   });
 });

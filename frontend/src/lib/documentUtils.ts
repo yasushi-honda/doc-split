@@ -7,7 +7,7 @@
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 import { Timestamp } from 'firebase/firestore';
-import type { DocumentStatus, SplitSegment } from '@shared/types';
+import type { Document, DocumentStatus, SplitSegment } from '@shared/types';
 // isValidCustomerSelection は元々ここに定義されていたが、functions/src/drive/customerAmbiguityGate.ts
 // (Driveエクスポートの顧客未確定ゲート、2026-07-25再設計)も同じsentinel判定を必要とするため
 // shared/customerIdentity.ts へ移設した。ここでは同一ファイル内(buildSegmentConfirmedFlags等)
@@ -44,6 +44,18 @@ export const DEFAULT_STATUS_CONFIG: StatusConfig = {
 /**
  * ドキュメントステータスの表示設定を取得
  */
+/**
+ * 「複数名の可能性」があり、まだ複製(配信)されていない書類か。
+ * バッジ(MultiCustomerBadge)と、一覧の「複数名の可能性のみ」フィルタ(DocumentsPage)の共通条件。
+ * `distributionId` を持つ書類は複製済み・配信済み(ADR-0024・ADR-0032)でバッジは出さないため、
+ * フィルタも同じ条件にしないと、複製済みの書類がバッジなしで絞り込みに残り続ける。
+ */
+export function isMultiCustomerPending(
+  document: Pick<Document, 'multiCustomerDetected' | 'distributionId'>
+): boolean {
+  return document.multiCustomerDetected === true && !document.distributionId;
+}
+
 export function getStatusConfig(status: DocumentStatus): StatusConfig {
   return DOCUMENT_STATUS_CONFIG[status] || DEFAULT_STATUS_CONFIG;
 }

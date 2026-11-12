@@ -197,13 +197,13 @@ PDFを分割する。
 ```typescript
 {
   created: Array<{ customerId: string; documentId: string }>;
-  skipped: Array<{ customerId: string; reason: 'already-exists' | 'already-in-group' }>;
+  skipped: Array<{ customerId: string; reason: 'already-exists' | 'already-in-group' | 'reassigned' }>;
 }
 ```
 
 **エラー:** `invalid-argument`（空・不正ID・元の書類と同じ利用者・5名以上）、`not-found`（元の書類・利用者マスターが無い）、`failed-precondition`（未処理・分割元・利用者未確定・合計5名超過）。
 
-**冪等:** 複製docのIDは`{元docId}_dup_{customerId}`。同じ入力を再実行しても書類は増えず、`skipped`で返る。
+**冪等:** 複製docのIDは`{元docId}_dup_{customerId}`。同じ入力を再実行しても書類は増えず、`skipped`で返る。`already-exists`は作成済み、`already-in-group`は同じFAXのグループに同じ利用者の書類が既にある場合、`reassigned`は決定的IDの書類はあるが複製後に別の利用者へ付け替えられている場合（その書類を削除してから複製し直す）。
 
 #### rotatePdfPages
 

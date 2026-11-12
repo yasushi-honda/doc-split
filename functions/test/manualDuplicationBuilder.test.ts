@@ -16,6 +16,7 @@ import {
   MANUAL_DUPLICATION_MAX_GROUP_SIZE,
   buildManualDuplicateDocData,
   buildManualDuplicateDocId,
+  parseOcrRunId,
   planManualDuplication,
   type BuildManualDuplicateInput,
 } from '../src/documents/manualDuplicationBuilder';
@@ -91,6 +92,15 @@ function fullSource(): Record<string, unknown> {
     summaryState: 'done',
     summaryRunId: 'run-s',
     summaryProvider: 'sarashina',
+    summaryError: 'エラー文',
+    summaryErrorKind: 'timeout',
+    summaryAttemptCount: 2,
+    summaryStateUpdatedAt: { seconds: 1793900004, nanoseconds: 0 },
+    summaryManualRequestedAt: { seconds: 1793900005, nanoseconds: 0 },
+    splitSuggestions: [{ afterPageNumber: 1, reason: 'manual', confidence: 100 }],
+    pageRotations: [{ pageNumber: 1, rotation: 90 }],
+    ocrResult: '旧形式の本体の全文',
+    pageResults: [{ pageNumber: 1, text: 'p1' }],
     customerKey: 'テスト太郎',
     officeKey: 'テスト事業所',
     documentTypeKey: '提供票',
@@ -209,6 +219,7 @@ describe('buildManualDuplicateDocData (複製の中身: 許可リスト方式)',
       'provenance', 'provenanceBackfill', 'provenanceOrigin',
       'multiCustomerDetected', 'multiCustomerCount', 'customerCandidates', 'allCustomerCandidates',
       'summary', 'summaryState', 'summaryRunId', 'summaryProvider',
+      'summaryError', 'summaryErrorKind', 'summaryAttemptCount', 'summaryStateUpdatedAt', 'summaryManualRequestedAt',
       'customerKey', 'officeKey', 'documentTypeKey', 'careManagerKey',
       'ocrRunId', 'retryCount', 'ocrResult', 'pageResults',
     ];
@@ -261,6 +272,33 @@ describe('buildManualDuplicateDocData (複製の中身: 許可リスト方式)',
     delete source.fileDateFormatted;
     // UTC 03:00 は JST(12:00)でも UTC(03:00)でも 11/05 になる(Date#getDate はプロセスのTZ依存のため、日付がずれない時刻を選ぶ)
     source.fileDate = { seconds: Date.UTC(2026, 10, 5, 3, 0, 0) / 1000, nanoseconds: 0 };
+    const result = buildManualDuplicateDocData(input({ source }));
+    expect(result.displayFileName).to.equal('提供票_テスト事業所_20261105_テスト花子.pdf');
+  });
+
+  it('日付を手で直した書類は、保存済みの fileDateFormatted(古いOCR日付)でなく fileDate から displayFileName を作る', () => {
+    // 手編集(useDocumentEdit)は fileDate しか更新しない。fileDateFormatted を優先すると、複製側の
+    // fileDate は新しい日付なのに、Driveに出る displayFileName だけ古い日付になる。
+    const source = fullSource();
+    source.fileDateFormatted = '2026/11/05'; // OCRが読んだ(誤った)日付
+    // 職員が 2026/11/10 に直した(JSTの0時 = 前日15:00 UTC)
+    source.fileDate = { seconds: Date.UTC(2026, 10, 9, 15, 0, 0) / 1000, nanoseconds: 0 };
+    const result = buildManualDuplicateDocData(input({ source }));
+    expect(result.displayFileName).to.equal('提供票_テスト事業所_20261110_テスト花子.pdf');
+  });
+
+  it('fileDate を日本時間で整形する(サーバーのTZ(UTC)で整形すると、JST 0時の日付が前日になる)', () => {
+    const source = fullSource();
+    delete source.fileDateFormatted;
+    source.fileDate = { seconds: Date.UTC(2026, 10, 9, 15, 0, 0) / 1000, nanoseconds: 0 }; // 11/10 00:00 JST
+    const result = buildManualDuplicateDocData(input({ source }));
+    expect(result.displayFileName).to.contain('20261110');
+  });
+
+  it('fileDate が無い書類は、保存済みの fileDateFormatted から作る', () => {
+    const source = fullSource();
+    delete source.fileDate;
+    source.fileDateFormatted = '2026/11/05';
     const result = buildManualDuplicateDocData(input({ source }));
     expect(result.displayFileName).to.equal('提供票_テスト事業所_20261105_テスト花子.pdf');
   });
@@ -329,6 +367,21 @@ describe('planManualDuplication (重複防止・人数上限)', () => {
         requestedCustomerIds: ['c-a', null as unknown as string],
       });
       expect(r).to.deep.include({ ok: false, code: 'invalid-argument', reason: 'invalid-customer-id' });
+    });
+
+    it('空白だけの customerId は invalid-argument', () => {
+      const r = planManualDuplication({ ...base, requestedCustomerIds: ['  '] });
+      expect(r).to.deep.include({ ok: false, code: 'invalid-argument', reason: 'invalid-customer-id' });
+    });
+
+    it('配列でなく文字列が渡されたら invalid-argument(1文字ずつの配列として扱わない)', () => {
+      const r = planManualDuplication({ ...base, requestedCustomerIds: 'c-a' });
+      expect(r).to.deep.include({ ok: false, code: 'invalid-argument', reason: 'empty-request' });
+    });
+
+    it('4名までの上限は、重複を除いた人数で判定する(重複を含めて5件でも、実際は4名ならOK)', () => {
+      const r = planManualDuplication({ ...base, requestedCustomerIds: ['a', 'a', 'b', 'c', 'd'] });
+      expect(r).to.deep.equal({ ok: true, toCreate: ['a', 'b', 'c', 'd'], skipped: [] });
     });
 
     it('パス区切り(/)を含む customerId は invalid-argument(Firestoreのドキュメントパスを壊す)', () => {
@@ -512,5 +565,20 @@ describe('planManualDuplication (重複防止・人数上限)', () => {
       });
       expect(r).to.deep.equal({ ok: true, toCreate: ['a', 'b'], skipped: [] });
     });
+  });
+});
+
+describe('parseOcrRunId (OCR全文URLから ocrRunId を取り出す)', () => {
+  it('gs://bucket/ocr-results/{docId}/{ocrRunId}.txt から ocrRunId を取り出す', () => {
+    expect(parseOcrRunId('gs://test-bucket/ocr-results/src1/run-a.txt')).to.equal('run-a');
+  });
+
+  it('拡張子が無くても、最後の区切り以降を返す', () => {
+    expect(parseOcrRunId('gs://test-bucket/ocr-results/src1/run-b')).to.equal('run-b');
+  });
+
+  it('末尾が区切りの場合・空文字は null(解釈できない)', () => {
+    expect(parseOcrRunId('gs://test-bucket/ocr-results/src1/')).to.equal(null);
+    expect(parseOcrRunId('')).to.equal(null);
   });
 });

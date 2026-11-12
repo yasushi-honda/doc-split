@@ -1,5 +1,6 @@
 import { Users } from 'lucide-react'
 import type { Document } from '@shared/types'
+import { isMultiCustomerPending } from '@/lib/documentUtils'
 
 interface MultiCustomerBadgeProps {
   document: Pick<Document, 'multiCustomerDetected' | 'multiCustomerCount' | 'distributionId'>
@@ -20,8 +21,8 @@ interface MultiCustomerBadgeProps {
  * (plan-crossreview codex指摘: OCRの確信度付き提案であって確定事実ではないため)。
  */
 export function MultiCustomerBadge({ document }: MultiCustomerBadgeProps) {
-  if (!document.multiCustomerDetected) return null
-  if (document.distributionId) return null
+  // 複製済み・配信済み(distributionId あり)では出さない。一覧のフィルタも同じ関数で判定する
+  if (!isMultiCustomerPending(document)) return null
 
   const count = document.multiCustomerCount
   const label = typeof count === 'number' && count > 0 ? `複数名の可能性 (${count}名)` : '複数名の可能性'

@@ -24,11 +24,17 @@ vi.mock('@/lib/firebase', () => ({
 
 // マスター取得(Firestore経由)をバイパス
 let mockCustomers: CustomerMaster[] = []
+let mockMasterError = false
+let mockMasterLoading = false
 vi.mock('@/hooks/useDocuments', async () => {
   const actual = await vi.importActual<typeof import('@/hooks/useDocuments')>('@/hooks/useDocuments')
   return {
     ...actual,
-    useCustomerMasters: () => ({ data: mockCustomers }),
+    useCustomerMasters: () => ({
+      data: mockMasterError || mockMasterLoading ? undefined : mockCustomers,
+      isError: mockMasterError,
+      isLoading: mockMasterLoading,
+    }),
   }
 })
 
@@ -37,11 +43,13 @@ vi.mock('@/components/MasterSelectField', () => ({
   MasterSelectField: ({
     items,
     onChange,
+    disabled,
   }: {
     items: Array<{ id: string; name: string; notes?: string }>
     onChange: (v: string, item?: { id: string; name: string }) => void
+    disabled?: boolean
   }) => (
-    <div data-testid="master-select-stub">
+    <div data-testid="master-select-stub" data-disabled={String(!!disabled)}>
       {items.map((item) => (
         <button key={item.id} onClick={() => onChange(item.name, item)}>{`pick:${item.id}`}</button>
       ))}
@@ -59,11 +67,13 @@ vi.mock('@/hooks/useDuplicateDocument', () => ({
 const mockToastError = vi.fn()
 const mockToastSuccess = vi.fn()
 const mockToastInfo = vi.fn()
+const mockToastWarning = vi.fn()
 vi.mock('sonner', () => ({
   toast: {
     error: (...args: unknown[]) => mockToastError(...args),
     success: (...args: unknown[]) => mockToastSuccess(...args),
     info: (...args: unknown[]) => mockToastInfo(...args),
+    warning: (...args: unknown[]) => mockToastWarning(...args),
   },
 }))
 
@@ -132,6 +142,8 @@ describe('DuplicateDocumentModal', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockPending = false
+    mockMasterError = false
+    mockMasterLoading = false
     mockCustomers = [
       master('c-src', 'テスト太郎', { careManagerName: '担当甲' }),
       master('c-a', 'テスト花子', { careManagerName: '担当乙' }),
@@ -345,6 +357,122 @@ describe('DuplicateDocumentModal', () => {
       fireEvent.click(screen.getByRole('checkbox', { name: /テスト花子/ }))
       expect(submitButton().textContent).toContain('複製中')
       expect(isDisabled(submitButton())).toBe(true)
+    })
+  })
+
+  describe('結果の伝え方', () => {
+    it('付け替えられた複製(reassigned)は、「作成済み」ではなく、削除してから複製し直す手順を伝える', async () => {
+      mockMutateAsync.mockResolvedValue({
+        created: [],
+        skipped: [{ customerId: 'c-a', reason: 'reassigned' }],
+      })
+      renderModal()
+      fireEvent.click(screen.getByRole('checkbox', { name: /テスト花子/ }))
+      fireEvent.click(submitButton())
+
+      await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1))
+      const message = String(mockToastWarning.mock.calls[0]?.[0])
+      expect(message).toContain('付け替え')
+      expect(message).toContain('削除')
+      // 実際には書類が無いので「すでに作成済みです」とは言わない
+      expect(mockToastInfo).not.toHaveBeenCalled()
+    })
+
+    it('一部が作成され、一部が付け替え済みなら、作成の結果と付け替えの案内を両方出す', async () => {
+      mockMutateAsync.mockResolvedValue({
+        created: [{ customerId: 'c-b', documentId: 'src1_dup_c-b' }],
+        skipped: [{ customerId: 'c-a', reason: 'reassigned' }],
+      })
+      renderModal()
+      fireEvent.click(screen.getByRole('checkbox', { name: /テスト花子/ }))
+      fireEvent.click(screen.getByRole('checkbox', { name: /テスト次郎/ }))
+      fireEvent.click(submitButton())
+
+      await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledTimes(1))
+      expect(String(mockToastSuccess.mock.calls[0]?.[0])).toContain('1名分')
+      expect(mockToastWarning).toHaveBeenCalledTimes(1)
+    })
+
+    it('入力不正(invalid-argument)も、BE側の説明文をそのまま表示する', async () => {
+      mockMutateAsync.mockRejectedValue(callableError('invalid-argument', '元の書類と同じ利用者は指定できません'))
+      renderModal()
+      fireEvent.click(screen.getByRole('checkbox', { name: /テスト花子/ }))
+      fireEvent.click(submitButton())
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1))
+      expect(String(mockToastError.mock.calls[0]?.[0])).toContain('元の書類と同じ利用者は指定できません')
+    })
+  })
+
+  describe('元の書類の利用者が未確定のとき', () => {
+    it('押す前に案内を出し、「複製する」を押せなくする(押した後のエラーで初めて知らせない)', () => {
+      renderModal({ document: makeDocument({ customerConfirmed: false }) })
+      expect(screen.getByText(/利用者がまだ確定していません/)).toBeTruthy()
+      fireEvent.click(screen.getByRole('checkbox', { name: /テスト花子/ }))
+      expect(isDisabled(submitButton())).toBe(true)
+    })
+
+    it('customerConfirmed が未設定の書類も、未確定として扱う(BEと同じ)', () => {
+      const document = makeDocument()
+      delete (document as { customerConfirmed?: boolean }).customerConfirmed
+      renderModal({ document })
+      expect(screen.getByText(/利用者がまだ確定していません/)).toBeTruthy()
+    })
+
+    it('確定済みの書類では案内を出さない', () => {
+      renderModal()
+      expect(screen.queryByText(/利用者がまだ確定していません/)).toBeNull()
+    })
+  })
+
+  describe('利用者マスターの読み込み', () => {
+    it('読み込みに失敗したら、「該当なし」に見えないよう失敗を伝え、検索欄を使えなくする(OCR候補は選べる)', () => {
+      mockMasterError = true
+      renderModal()
+      expect(screen.getByText(/利用者マスターを読み込めませんでした/)).toBeTruthy()
+      expect(screen.getByTestId('master-select-stub').getAttribute('data-disabled')).toBe('true')
+      // OCR候補(書類に保存済みの情報)は、マスターが読めなくても選べる
+      fireEvent.click(screen.getByRole('checkbox', { name: /テスト花子/ }))
+      expect(isDisabled(submitButton())).toBe(false)
+    })
+
+    it('読み込み中は検索欄を使えなくする', () => {
+      mockMasterLoading = true
+      renderModal()
+      expect(screen.getByTestId('master-select-stub').getAttribute('data-disabled')).toBe('true')
+    })
+
+    it('読み込みに成功していれば、失敗の案内は出ず、検索欄が使える', () => {
+      renderModal()
+      expect(screen.queryByText(/利用者マスターを読み込めませんでした/)).toBeNull()
+      expect(screen.getByTestId('master-select-stub').getAttribute('data-disabled')).toBe('false')
+    })
+  })
+
+  describe('選択の状態管理', () => {
+    it('閉じて開き直すと、前回の選択は空に戻る', () => {
+      const { rerender } = render(
+        <DuplicateDocumentModal document={makeDocument()} open={true} onOpenChange={vi.fn()} />
+      )
+      fireEvent.click(screen.getByRole('checkbox', { name: /テスト花子/ }))
+      expect(submitButton().textContent).toContain('1名分')
+
+      rerender(<DuplicateDocumentModal document={makeDocument()} open={false} onOpenChange={vi.fn()} />)
+      rerender(<DuplicateDocumentModal document={makeDocument()} open={true} onOpenChange={vi.fn()} />)
+
+      expect(isDisabled(submitButton())).toBe(true)
+      expect(screen.getByText('まだ選ばれていません')).toBeTruthy()
+    })
+
+    it('上限(4名)に達しても、チェック済みの候補は外せる(未選択の候補だけが選べなくなる)', () => {
+      renderModal()
+      fireEvent.click(screen.getByText('pick:c-c'))
+      fireEvent.click(screen.getByText('pick:c-d'))
+      fireEvent.click(screen.getByText('pick:c-e'))
+      fireEvent.click(screen.getByRole('checkbox', { name: /テスト花子/ }))
+
+      expect(isDisabled(screen.getByRole('checkbox', { name: /テスト花子/ }))).toBe(false)
+      expect(isDisabled(screen.getByRole('checkbox', { name: /テスト次郎/ }))).toBe(true)
     })
   })
 

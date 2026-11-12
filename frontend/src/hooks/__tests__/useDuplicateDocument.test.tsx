@@ -32,7 +32,13 @@ function setup() {
   )
   const { result } = renderHook(() => useDuplicateDocument(), { wrapper })
   const invalidatedKeys = () => invalidate.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0])
-  return { result, invalidate, invalidatedKeys }
+  /** 指定キーの invalidateQueries 呼び出しに渡されたオプション(複数回呼ばれた場合は最後) */
+  const invalidateOptionsFor = (key: string) =>
+    invalidate.mock.calls
+      .map((c) => c[0] as { queryKey: unknown[]; refetchType?: string })
+      .filter((o) => o.queryKey[0] === key)
+      .pop()
+  return { result, invalidate, invalidatedKeys, invalidateOptionsFor }
 }
 
 function callableError(code: string): Error {
@@ -78,6 +84,18 @@ describe('useDuplicateDocument', () => {
     expect(keys).toContain('distributionSiblingCount')
   })
 
+  it('書類一覧(documentsInfinite)は即時の全ページ再取得をさせない(refetchType: none)', async () => {
+    // 即時再取得にすると、読み込み済みの全ページを再取得して Firestore の読み取りが跳ね上がる(#891型)
+    mockCallFunction.mockResolvedValue({ created: [], skipped: [] })
+    const { result, invalidateOptionsFor } = setup()
+
+    await act(async () => {
+      await result.current.mutateAsync({ documentId: 'src1', customerIds: ['c-a'] })
+    })
+
+    expect(invalidateOptionsFor('documentsInfinite')?.refetchType).toBe('none')
+  })
+
   it('失敗(failed-precondition 等)ではキャッシュを無効化しない', async () => {
     mockCallFunction.mockRejectedValue(callableError('failed-precondition'))
     const { result, invalidate } = setup()
@@ -89,14 +107,33 @@ describe('useDuplicateDocument', () => {
     expect(invalidate).not.toHaveBeenCalled()
   })
 
-  it('aborted(別の操作と競合)では、サーバー側が変わった可能性があるため無効化する', async () => {
-    mockCallFunction.mockRejectedValue(callableError('aborted'))
-    const { result, invalidatedKeys } = setup()
+  // commit 済みなのに応答が失われうるエラー。サーバーの状態が変わっている可能性があるため画面を最新化する。
+  // この Callable は aborted を返さない(Firestoreの競合リトライが尽きると internal になる)が、
+  // 他の onCall と同じ分類で aborted も含める。
+  for (const code of ['internal', 'deadline-exceeded', 'aborted']) {
+    it(`${code}(結果が不明)では、サーバー側が変わった可能性があるため無効化する`, async () => {
+      mockCallFunction.mockRejectedValue(callableError(code))
+      const { result, invalidatedKeys } = setup()
 
-    await act(async () => {
-      await expect(result.current.mutateAsync({ documentId: 'src1', customerIds: ['c-a'] })).rejects.toThrow()
+      await act(async () => {
+        await expect(result.current.mutateAsync({ documentId: 'src1', customerIds: ['c-a'] })).rejects.toThrow()
+      })
+
+      expect(invalidatedKeys()).toContain('distributionSiblingCount')
+      expect(invalidatedKeys()).toContain('document')
     })
+  }
 
-    expect(invalidatedKeys()).toContain('distributionSiblingCount')
-  })
+  for (const code of ['failed-precondition', 'invalid-argument', 'not-found', 'permission-denied', 'unavailable']) {
+    it(`${code}(サーバーの状態は変わっていない)では無効化しない`, async () => {
+      mockCallFunction.mockRejectedValue(callableError(code))
+      const { result, invalidate } = setup()
+
+      await act(async () => {
+        await expect(result.current.mutateAsync({ documentId: 'src1', customerIds: ['c-a'] })).rejects.toThrow()
+      })
+
+      expect(invalidate).not.toHaveBeenCalled()
+    })
+  }
 })

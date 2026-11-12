@@ -15,7 +15,7 @@
 
 import type { FieldValue } from 'firebase-admin/firestore';
 import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
-import { timestampToDateString, type TimestampLike } from '../../../shared/timestampHelpers';
+import type { TimestampLike } from '../../../shared/timestampHelpers';
 import { buildFaxDuplicationMemberOverride } from '../ocr/faxDuplication';
 import {
   MANUAL_DUPLICATION_MAX_GROUP_SIZE,
@@ -77,6 +77,29 @@ const CARRIED_FIELDS = [
   'pass2Promotion',
 ] as const;
 
+/** Firestore Timestamp(またはduck-type)を日本時間の YYYY-MM-DD にする。解釈できなければ undefined */
+const JST_DATE_FORMAT = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Tokyo',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+function formatFileDateJst(ts: TimestampLike | null | undefined): string | undefined {
+  if (!ts || typeof ts.seconds !== 'number' || !Number.isFinite(ts.seconds)) return undefined;
+  const date = typeof ts.toDate === 'function' ? ts.toDate() : new Date(ts.seconds * 1000);
+  return JST_DATE_FORMAT.format(date);
+}
+
+/**
+ * `gs://bucket/ocr-results/{docId}/{ocrRunId}.txt` から ocrRunId を取り出す。
+ * 末尾が区切りの場合・空文字は解釈できないため null。
+ */
+export function parseOcrRunId(url: string): string | null {
+  const match = /([^/]+?)(?:\.txt)?$/.exec(url);
+  return match ? match[1]! : null;
+}
+
 export interface ManualDuplicateTarget {
   customerId: string;
   customerName: string;
@@ -126,11 +149,13 @@ export function buildManualDuplicateDocData(input: BuildManualDuplicateInput): R
   };
 
   // displayFileName は選んだ利用者名で作り直す(元の利用者名を引き継がない)。
-  // 日付は保存済みの fileDateFormatted を優先し、無ければ Timestamp から作る(splitPdf と同じ規約)。
+  // 日付は fileDate(Timestamp)を優先する。職員が手で日付を直すと fileDate だけが更新され、
+  // 保存済みの fileDateFormatted は古いOCR日付のまま残るため、それを優先するとDriveに古い日付の
+  // ファイル名が出る(splitPdf は fileDateFormatted を優先する既存の規約だが、複製は
+  // 「OCRの誤りを直してから複製する」流れで起きやすい)。日本時間で整形する(サーバーはUTC)。
   const fileDateForName =
-    typeof source.fileDateFormatted === 'string'
-      ? source.fileDateFormatted
-      : timestampToDateString(source.fileDate as TimestampLike | null | undefined);
+    formatFileDateJst(source.fileDate as TimestampLike | null | undefined) ??
+    (typeof source.fileDateFormatted === 'string' ? source.fileDateFormatted : undefined);
   const displayFileName = generateDisplayFileName({
     documentType: source.documentType as string | undefined,
     customerName: target.customerName,

@@ -33,6 +33,14 @@ function invalidateDuplicateQueries(queryClient: QueryClient): void {
   invalidateGroupQueries(queryClient)
 }
 
+/**
+ * commit 済みなのに応答が失われうるエラー(タイムアウト・通信断・Firestoreの競合リトライ切れ)。
+ * サーバー側の状態が変わっている可能性があるため、画面を最新化する。この Callable 自身は aborted を
+ * 返さない(競合リトライが尽きると internal になる)が、他の onCall と同じ分類で含める。
+ * 判定が明確な拒否(failed-precondition・invalid-argument・not-found 等)では状態は変わっていない。
+ */
+const POSSIBLY_APPLIED_ERROR_CODES: ReadonlySet<string> = new Set(['aborted', 'internal', 'deadline-exceeded'])
+
 export function useDuplicateDocument() {
   const queryClient = useQueryClient()
 
@@ -40,8 +48,8 @@ export function useDuplicateDocument() {
     mutationFn: duplicateDocument,
     onSuccess: () => invalidateDuplicateQueries(queryClient),
     onError: (err) => {
-      // aborted(別の操作と競合)は、サーバー側の状態が実際に変わった可能性があるため画面を最新化する
-      if (getCallableErrorCode(err) === 'aborted') {
+      const code = getCallableErrorCode(err)
+      if (code !== undefined && POSSIBLY_APPLIED_ERROR_CODES.has(code)) {
         invalidateDuplicateQueries(queryClient)
       }
     },
