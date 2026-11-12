@@ -382,6 +382,18 @@ describe('duplicateDocumentForCustomers 統合テスト (ADR-0032)', () => {
       expect(err.message).to.contain('詳細画面で利用者を確定');
     });
 
+    it('元の書類が利用者マスターに紐づいていない(customerId なし)場合は、確定済みに見えても複製できない', async () => {
+      // customerId が無いと「元の書類と同じ利用者」の判定(IDの比較)が効かず、マスター名との
+      // 食い違い確認もできない。同じ人の書類を重ねて作れてしまうため、先に利用者を選び直してもらう。
+      const data = sourceDocData({ customerConfirmed: true });
+      delete data.customerId;
+      await db.doc('documents/src1').set(data);
+      await db.doc('documents/src1/detail/main').set({ ocrResult: 'x', pageResults: [] });
+      const err = await expectHttpsError(() => run(['c-a']), 'failed-precondition');
+      expect(err.message).to.contain('マスター');
+      expect(await countDocuments()).to.equal(1);
+    });
+
     it('元の書類の利用者IDがマスターに無い場合は、マスターに見つからない旨を伝える', async () => {
       await seedSource({ customerId: 'c-deleted-master' });
       const err = await expectHttpsError(() => run(['c-a']), 'failed-precondition');
@@ -754,6 +766,22 @@ describe('duplicateDocumentForCustomers 統合テスト (ADR-0032)', () => {
       const forB = members.filter((m) => m.customerId === 'c-b');
       expect(forB, 'c-b の書類はグループ内で1件だけ').to.have.length(1);
       expect(members.length).to.be.at.most(5);
+    });
+
+    it('異なる利用者を同時に追加しても、グループ合計は5名を超えない(合わせて6名になる片方は拒否される)', async () => {
+      // 利用者の重複(同じ人を同時に追加)ではなく、人数の上限の競合。判定と作成が1回のcommitでなければ、
+      // 2つの呼び出しが同じ人数を読んで両方成功し、6名になる。
+      await seedSource();
+      await run(['c-a']); // 元の書類 + 1名 = 2名
+      const results = await Promise.allSettled([run(['c-b', 'c-c']), run(['c-d', 'c-e'])]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+      expect(fulfilled, '2 + 2 + 2 = 6名になるため、両方は成功できない').to.have.length(1);
+      expect(rejected).to.have.length(1);
+      expect(rejected[0]!.reason).to.be.instanceOf(HttpsError);
+      expect((rejected[0]!.reason as HttpsError).code).to.equal('failed-precondition');
+      expect(await groupDocs('src1')).to.have.length(4);
     });
 
     it('複製後に利用者を変更しても、元の利用者用は作り直せず「作成済み」になる(IDは作成の履歴)', async () => {

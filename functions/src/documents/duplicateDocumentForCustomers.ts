@@ -158,6 +158,15 @@ export async function executeManualDuplication(params: {
     const sourceCustomerId =
       typeof source.customerId === 'string' && source.customerId !== '' ? source.customerId : null;
 
+    // 元の書類が利用者マスターに紐づいていること。customerId が無いと「元の書類と同じ利用者」の判定
+    // (IDの比較)も、マスター名との食い違い確認もできず、同じ人の書類を重ねて作れてしまう。
+    if (sourceCustomerId === null) {
+      throw new HttpsError(
+        'failed-precondition',
+        '元の書類の利用者がマスターの利用者に紐づいていません。詳細画面で利用者を選び直してください'
+      );
+    }
+
     // 依頼内容の形式を先に検証する(マスター等の読み取りに進む前に弾く)。
     // 既存メンバー・作成済みを空にした計画なので、ここで返るエラーは入力検証(空・不正ID・
     // 元の書類と同じ利用者・一度に4名超)だけで、成功時の toCreate は重複除去済みの依頼一覧になる。
