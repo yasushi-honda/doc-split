@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  canonicalizeAliasesForCompare,
   matchRowsById,
   pickBestExistingForCsvRow,
   type CsvRowWithId,
@@ -139,5 +140,70 @@ describe('pickBestExistingForCsvRow(同名の既存が複数あるとき、CSV�
     const noCm = { id: 'x', name: '架空太郎' } as { id: string; name: string; careManagerName?: string }
     const hasCm = { id: 'y', name: '架空太郎', careManagerName: '担当甲' }
     expect(pickBestExistingForCsvRow([hasCm, noCm], { careManagerName: '担当甲' }, ['careManagerName'])?.id).toBe('y')
+  })
+})
+
+describe('pickBestExistingForCsvRow(比較する列・同点・一部の列だけ値のある行)', () => {
+  // 1列だけが違う3件。どの列も単独で、その列の値を持つ候補を選べること(比較キーの取りこぼし防止)
+  const keys = ['furigana', 'careManagerName', 'notes', 'aliases'] as const
+  const base = { name: '架空太郎', furigana: 'かくうたろう', careManagerName: '担当甲', notes: 'メモ甲', aliases: '甲|乙' }
+
+  it.each([
+    ['furigana', 'べつふりがな'],
+    ['careManagerName', '担当乙'],
+    ['notes', 'メモ乙'],
+    ['aliases', '丙|丁'],
+  ] as const)('%s だけが違う候補が複数あっても、その列の値で候補を選ぶ', (key, otherValue) => {
+    const target = { id: 'target', ...base, [key]: otherValue }
+    const others = [
+      { id: 'x1', ...base },
+      { id: 'x2', ...base },
+    ]
+    // targetを先頭(最後ではない位置)に置く
+    expect(pickBestExistingForCsvRow([target, ...others], { [key]: otherValue }, keys)?.id).toBe('target')
+  })
+
+  it('比較キーに含まれない列の値は、選択に影響しない', () => {
+    const p = { id: 'p', name: '架空太郎', careManagerName: '担当甲', other: 'A' }
+    const q = { id: 'q', name: '架空太郎', careManagerName: '担当乙', other: 'B' }
+    expect(pickBestExistingForCsvRow([p, q], { careManagerName: '担当乙', other: 'A' }, ['careManagerName'])?.id).toBe('q')
+  })
+
+  it('内容が同じ候補が複数あるときは、後ろを選ぶ(従来の「最後の1件」と同じ。従来スキップだった行は今回もスキップになる)', () => {
+    const d1 = { id: 'd1', name: '架空太郎', careManagerName: '担当甲' }
+    const d2 = { id: 'd2', name: '架空太郎', careManagerName: '担当甲' }
+    expect(pickBestExistingForCsvRow([d1, d2], { careManagerName: '担当甲' }, ['careManagerName'])?.id).toBe('d2')
+  })
+
+  it('一部の列だけ値のある行が、最後以外の候補と完全一致する(値のある列がすべて同じ)なら、その候補を選ぶ', () => {
+    const first = { id: 'first', name: '架空太郎', careManagerName: '担当甲', notes: 'メモ' }
+    const last = { id: 'last', name: '架空太郎', careManagerName: '担当乙', notes: 'メモ' }
+    // 担当だけ値のある行 → firstが完全一致(従来は最後のlastとだけ比べて不一致→二重登録されていた)
+    expect(pickBestExistingForCsvRow([first, last], { careManagerName: '担当甲', notes: '' }, ['careManagerName', 'notes'])?.id).toBe('first')
+  })
+})
+
+describe('canonicalizeAliasesForCompare(別表記の表記ゆれを書込み側と同じに整える)', () => {
+  it.each([
+    [undefined, ''],
+    ['', ''],
+    ['x|y', 'x|y'],
+    ['x | y', 'x|y'],
+    ['  x  |  y  ', 'x|y'],
+    ['x|y|', 'x|y'],
+    ['|x||y', 'x|y'],
+    ['x', 'x'],
+    ['|', ''],
+    ['  ', ''],
+  ] as const)('%j → %j', (input, expected) => {
+    expect(canonicalizeAliasesForCompare(input)).toBe(expected)
+  })
+
+  it('全角の「｜」は区切りとして扱わない(書込み側も区切らないため。1つの別表記のまま)', () => {
+    expect(canonicalizeAliasesForCompare('x｜y')).toBe('x｜y')
+  })
+
+  it('順序は保つ(x|y と y|x は別の値として扱う。書込みも順序どおりに保存するため)', () => {
+    expect(canonicalizeAliasesForCompare('y|x')).toBe('y|x')
   })
 })

@@ -29,7 +29,7 @@ import type {
 import { validateOfficeMasterImport } from '@shared/officeMasterValidation'
 import { findSameNameCollisionNames } from '@shared/customerIdentity'
 import { buildContractEndedLookup, type ContractEndedLookup } from '@/lib/contractEnded'
-import { pickBestExistingForCsvRow } from '@/lib/csvImportMatching'
+import { canonicalizeAliasesForCompare, pickBestExistingForCsvRow } from '@/lib/csvImportMatching'
 
 // 重複エラークラス
 export class DuplicateError extends Error {
@@ -1125,12 +1125,15 @@ export async function checkCustomerDuplicatesWithDetails(
 
   return items.map(item => {
     const normalizedName = normalizeName(item.name)
+    // フリガナ・別表記は、書込み側と同じ整え方にして既存と比べる(保存済みの値は整形後のため、生のままだと
+    // 半角カナや `x | y` の表記ゆれだけで不一致になり、すでにいる人が二重登録されうる)。
+    // 整えた値でも書込みの結果は変わらない(書込み側が同じ整形を行う)
     const csvData = {
       name: normalizedName,
-      furigana: item.furigana,
+      furigana: item.furigana ? normalizeName(item.furigana) : '',
       careManagerName: item.careManagerName || '',
       notes: item.notes || '',
-      aliases: item.aliases || '',
+      aliases: canonicalizeAliasesForCompare(item.aliases),
     }
     const candidates = existingByName.get(normalizedName) ?? []
     const existing = pickBestExistingForCsvRow(candidates, csvData, ['furigana', 'careManagerName', 'notes', 'aliases'])
@@ -1172,7 +1175,8 @@ export async function checkOfficeDuplicatesWithDetails(
       name: normalizedName,
       shortName: item.shortName || '',
       notes: item.notes || '',
-      aliases: item.aliases || '',
+      // 別表記は書込み側と同じ整え方にして既存と比べる(顧客と同じ理由)
+      aliases: canonicalizeAliasesForCompare(item.aliases),
     }
     const candidates = existingByName.get(normalizedName) ?? []
     const existing = pickBestExistingForCsvRow(candidates, csvData, ['shortName', 'notes', 'aliases'])

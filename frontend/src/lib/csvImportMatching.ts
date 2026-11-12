@@ -88,6 +88,23 @@ export function matchRowsById<T extends CsvRowWithId>(
 }
 
 /**
+ * CSVの「別表記」セルを、書込み側(useMasters の parseSeparatedListForImport)と同じ区切り方で整える。
+ * `|` で区切り、各要素の前後の空白を除き、空要素を捨てて `|` で連結し直す。
+ *
+ * 既存側は保存済みの配列を `join('|')` した形で照合に出るため、CSV側を生の文字列のまま比べると、
+ * `x | y` や末尾の `|` のような表記ゆれだけで不一致になり、すでにいる人が二重登録されうる。
+ * 区切りは書込み側と同じ半角 `|` のみ(全角の `｜` は区切りとして扱わない。書込みも区切らないため)。
+ */
+export function canonicalizeAliasesForCompare(value: string | undefined): string {
+  if (!value) return ''
+  return value
+    .split('|')
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+    .join('|')
+}
+
+/**
  * 同名の既存レコードが複数あるとき、CSV行(名前以外の列)に最も合う1件を選ぶ。
  *
  * 従来は、同名の既存を氏名キーのMapに入れる際に最後の1件だけが残り、CSV行はその1件とだけ

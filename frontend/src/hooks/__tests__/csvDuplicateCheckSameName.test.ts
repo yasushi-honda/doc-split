@@ -165,3 +165,172 @@ describe('checkOfficeDuplicatesWithDetails(同名の事業所が複数あると�
     expect(result?.existingData?.id).toBe('o3')
   })
 })
+
+describe('checkCustomerDuplicatesWithDetails(比較する項目・表記ゆれ)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // 同名2件。区別は担当・フリガナ・備考・別表記のどれか1つだけ(最後のbと違う値を持つaを、各項目で引き当てる)
+  const base = { name: '架空太郎', furigana: 'かくうたろう', careManagerName: '担当甲', notes: 'メモ甲', aliases: ['甲', '乙'] }
+
+  it.each([
+    ['furigana', { furigana: 'べつふりがな' }, { furigana: 'べつふりがな' }],
+    ['careManagerName', { careManagerName: '担当乙' }, { careManagerName: '担当乙' }],
+    ['notes', { notes: 'メモ乙' }, { notes: 'メモ乙' }],
+    ['aliases', { aliases: ['丙', '丁'] }, { aliases: '丙|丁' }],
+  ] as const)('顧客: %s だけが違う既存を、最後以外でも引き当てる', async (_key, storedOverride, csvOverride) => {
+    mockGetDocs.mockResolvedValue(snapshotOf([
+      { id: 'target', data: { ...base, ...storedOverride } },
+      { id: 'last', data: { ...base } },
+    ]))
+    const { checkCustomerDuplicatesWithDetails } = await import('../useMasters')
+
+    const [result] = await checkCustomerDuplicatesWithDetails([
+      { name: '架空太郎', furigana: 'かくうたろう', careManagerName: '担当甲', notes: 'メモ甲', aliases: '甲|乙', ...csvOverride },
+    ])
+
+    expect(result?.existingData?.id).toBe('target')
+  })
+
+  it('別表記の表記ゆれ(区切りの前後の空白・末尾の区切り)があっても、保存済みの別表記と同じと見なして引き当てる', async () => {
+    mockGetDocs.mockResolvedValue(snapshotOf([
+      { id: 'target', data: { ...base, aliases: ['丙', '丁'] } },
+      { id: 'last', data: { ...base } },
+    ]))
+    const { checkCustomerDuplicatesWithDetails } = await import('../useMasters')
+
+    const [result] = await checkCustomerDuplicatesWithDetails([
+      { name: '架空太郎', furigana: 'かくうたろう', careManagerName: '担当甲', notes: 'メモ甲', aliases: ' 丙 | 丁 |' },
+    ])
+
+    expect(result?.existingData?.id).toBe('target')
+    // プレビュー・書込みに渡るCSV側の値は、書込み側のパース結果(丙・丁)と同じ整形後の形
+    expect(result?.csvData.aliases).toBe('丙|丁')
+  })
+
+  it('フリガナが半角カナでも、書込み側と同じ正規化(全角カナ)で既存と比べる', async () => {
+    mockGetDocs.mockResolvedValue(snapshotOf([
+      { id: 'target', data: { ...base, furigana: 'カクウタロウ' } },
+      { id: 'last', data: { ...base } },
+    ]))
+    const { checkCustomerDuplicatesWithDetails } = await import('../useMasters')
+
+    const [result] = await checkCustomerDuplicatesWithDetails([
+      { name: '架空太郎', furigana: 'ｶｸｳﾀﾛｳ', careManagerName: '担当甲', notes: 'メモ甲', aliases: '甲|乙' },
+    ])
+
+    expect(result?.existingData?.id).toBe('target')
+    expect(result?.csvData.furigana).toBe('カクウタロウ')
+  })
+
+  it('別表記が空欄のCSV行は、別表記の違いで候補を選ばない(空欄=変更しない)', async () => {
+    mockGetDocs.mockResolvedValue(snapshotOf([
+      { id: 'target', data: { ...base, aliases: ['丙', '丁'] } },
+      { id: 'last', data: { ...base, careManagerName: '担当乙' } },
+    ]))
+    const { checkCustomerDuplicatesWithDetails } = await import('../useMasters')
+
+    const [result] = await checkCustomerDuplicatesWithDetails([
+      { name: '架空太郎', furigana: 'かくうたろう', careManagerName: '担当甲' },
+    ])
+
+    expect(result?.existingData?.id).toBe('target')
+    expect(result?.csvData.aliases).toBe('')
+  })
+
+  it('氏名に全角スペースがあるCSV行も、正規化した氏名で同名の既存を引き当てる', async () => {
+    mockGetDocs.mockResolvedValue(snapshotOf([
+      { id: 'target', data: { ...base, name: '架空 太郎' } },
+      { id: 'last', data: { ...base, name: '架空 太郎', careManagerName: '担当乙' } },
+    ]))
+    const { checkCustomerDuplicatesWithDetails } = await import('../useMasters')
+
+    const [result] = await checkCustomerDuplicatesWithDetails([
+      { name: '架空　太郎', furigana: 'かくうたろう', careManagerName: '担当甲' },
+    ])
+
+    expect(result?.existingData?.id).toBe('target')
+    expect(result?.sameNameExistingCount).toBe(2)
+  })
+
+  it('同じ内容の既存が2件(完全な重複)なら、従来どおり後ろの1件と照合する', async () => {
+    mockGetDocs.mockResolvedValue(snapshotOf([
+      { id: 'd1', data: { ...base } },
+      { id: 'd2', data: { ...base } },
+    ]))
+    const { checkCustomerDuplicatesWithDetails } = await import('../useMasters')
+
+    const [result] = await checkCustomerDuplicatesWithDetails([
+      { name: '架空太郎', furigana: 'かくうたろう', careManagerName: '担当甲', notes: 'メモ甲', aliases: '甲|乙' },
+    ])
+
+    expect(result?.existingData?.id).toBe('d2')
+  })
+
+  it('値のある項目だけの行が最後以外の既存と一致すれば、その既存の値(別表記を含む)が返る', async () => {
+    mockGetDocs.mockResolvedValue(snapshotOf([
+      { id: 'target', data: { ...base } },
+      { id: 'last', data: { ...base, careManagerName: '担当乙', aliases: ['丙'] } },
+    ]))
+    const { checkCustomerDuplicatesWithDetails } = await import('../useMasters')
+
+    const [result] = await checkCustomerDuplicatesWithDetails([
+      { name: '架空太郎', furigana: 'かくうたろう', careManagerName: '担当甲' },
+    ])
+
+    expect(result?.existingData).toMatchObject({
+      id: 'target',
+      careManagerName: '担当甲',
+      notes: 'メモ甲',
+      aliases: '甲|乙',
+    })
+  })
+})
+
+describe('checkOfficeDuplicatesWithDetails(件数・比較する項目・別表記)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const base = { name: '架空事業所', shortName: '甲支店', notes: '北', aliases: ['甲', '乙'] }
+
+  it('同名が0件なら新規(existingData: null・件数0)', async () => {
+    mockGetDocs.mockResolvedValue(snapshotOf([{ id: 'z', data: { ...base, name: '別の事業所' } }]))
+    const { checkOfficeDuplicatesWithDetails } = await import('../useMasters')
+
+    const [result] = await checkOfficeDuplicatesWithDetails([{ name: '架空事業所', shortName: '甲支店' }])
+
+    expect(result?.existingData).toBeNull()
+    expect(result?.isDuplicate).toBe(false)
+    expect(result?.sameNameExistingCount).toBe(0)
+  })
+
+  it('同名が1件なら、CSV行が一致しなくてもその1件と照合する(従来どおり)', async () => {
+    mockGetDocs.mockResolvedValue(snapshotOf([{ id: 'only', data: { ...base } }]))
+    const { checkOfficeDuplicatesWithDetails } = await import('../useMasters')
+
+    const [result] = await checkOfficeDuplicatesWithDetails([{ name: '架空事業所', shortName: '別の略称' }])
+
+    expect(result?.existingData?.id).toBe('only')
+    expect(result?.sameNameExistingCount).toBe(1)
+  })
+
+  it.each([
+    ['shortName', { shortName: '乙支店' }, { shortName: '乙支店' }],
+    ['notes', { notes: '南' }, { notes: '南' }],
+    ['aliases', { aliases: ['丙', '丁'] }, { aliases: ' 丙 | 丁 |' }],
+  ] as const)('事業所: %s だけが違う既存を、最後以外でも引き当てる(別表記は表記ゆれがあっても)', async (_key, storedOverride, csvOverride) => {
+    mockGetDocs.mockResolvedValue(snapshotOf([
+      { id: 'target', data: { ...base, ...storedOverride } },
+      { id: 'last', data: { ...base } },
+    ]))
+    const { checkOfficeDuplicatesWithDetails } = await import('../useMasters')
+
+    const [result] = await checkOfficeDuplicatesWithDetails([
+      { name: '架空事業所', shortName: '甲支店', notes: '北', aliases: '甲|乙', ...csvOverride },
+    ])
+
+    expect(result?.existingData?.id).toBe('target')
+  })
+})
