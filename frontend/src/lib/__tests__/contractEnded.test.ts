@@ -215,3 +215,101 @@ describe('findCustomerForGroupKey', () => {
     expect(findCustomerForGroupKey('田中太郎', buildCustomerNameIndex(undefined))).toBeNull();
   });
 });
+
+describe('同姓同名で契約中のマスターがあるときの未確定書類(契約終了で隠さない)', () => {
+  // 同姓同名2件: 先頭(契約終了)・後(契約中)。OCRは同姓同名があると先頭を自動で入れるが必ず未確定になるため、
+  // 契約中の方の書類が、契約終了のマスターに紐づいた未確定書類として一覧から消える事象への対応
+  const samenameLookup = buildContractEndedLookup([
+    master({ id: 'ended-A', name: '架空花子', isContractEnded: true }),
+    master({ id: 'active-A', name: '架空花子', isContractEnded: false }),
+    master({ id: 'ended-solo', name: '契約終了のみ次郎', isContractEnded: true }),
+  ]);
+
+  it('buildContractEndedLookup: 契約中のマスターが1人でもいる名前キーはactiveNameKeysに含む', () => {
+    expect(samenameLookup.activeNameKeys.has('架空花子')).toBe(true);
+  });
+
+  it('buildContractEndedLookup: 全員契約終了の名前キーはactiveNameKeysに含まない', () => {
+    expect(samenameLookup.activeNameKeys.has('契約終了のみ次郎')).toBe(false);
+  });
+
+  it('buildContractEndedLookup: isContractEndedが未設定のマスターは契約中扱いでactiveNameKeysに含む', () => {
+    const lookup = buildContractEndedLookup([
+      master({ id: 'x', name: '既存三郎', isContractEnded: true }),
+      { id: 'y', name: '既存三郎' },
+    ]);
+    expect(lookup.activeNameKeys.has('既存三郎')).toBe(true);
+  });
+
+  it('同姓同名の契約中がいる場合、契約終了マスターに紐づく未確定(customerConfirmed:false)書類は表示する', () => {
+    expect(
+      isDocumentHiddenByContractEnd(
+        { customerId: 'ended-A', customerName: '架空花子', customerConfirmed: false },
+        samenameLookup,
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  it('customerConfirmedが未設定の書類も同条件なら表示する(迷ったら表示)', () => {
+    expect(
+      isDocumentHiddenByContractEnd({ customerId: 'ended-A', customerName: '架空花子' }, samenameLookup, false),
+    ).toBe(false);
+  });
+
+  it('doc.customerKeyがあればそれで名前キーを判定する(customerNameが空でも)', () => {
+    expect(
+      isDocumentHiddenByContractEnd(
+        { customerId: 'ended-A', customerKey: '架空花子', customerConfirmed: false },
+        samenameLookup,
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  it('確定済み(customerConfirmed:true)の書類は、契約終了マスターに紐づくなら従来どおり非表示', () => {
+    expect(
+      isDocumentHiddenByContractEnd(
+        { customerId: 'ended-A', customerName: '架空花子', customerConfirmed: true },
+        samenameLookup,
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  it('同姓同名がおらず全員契約終了の名前なら、未確定でも従来どおり非表示', () => {
+    expect(
+      isDocumentHiddenByContractEnd(
+        { customerId: 'ended-solo', customerName: '契約終了のみ次郎', customerConfirmed: false },
+        samenameLookup,
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  it('書類の氏名・customerKeyが無い未確定書類は、判定できないため従来どおり非表示', () => {
+    expect(
+      isDocumentHiddenByContractEnd({ customerId: 'ended-A', customerConfirmed: false }, samenameLookup, false),
+    ).toBe(true);
+  });
+
+  it('契約中のマスターに紐づく書類は未確定でも表示(従来どおり)', () => {
+    expect(
+      isDocumentHiddenByContractEnd(
+        { customerId: 'active-A', customerName: '架空花子', customerConfirmed: false },
+        samenameLookup,
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  it('表示トグルONなら確定済みでも表示(従来どおり)', () => {
+    expect(
+      isDocumentHiddenByContractEnd(
+        { customerId: 'ended-A', customerName: '架空花子', customerConfirmed: true },
+        samenameLookup,
+        true,
+      ),
+    ).toBe(false);
+  });
+});
