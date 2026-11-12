@@ -1,8 +1,49 @@
 # ハンドオフメモ
 
-**更新日**: 2026-11-11(複数名が載るFAXの手動複製ボタンの仕様案と、同姓同名の調査結果を先方へ送付。同日、先方の追加質問2件への回答を送付し、回答内容を独立エージェントで検証。コード変更なし、実装は先方の了承待ち。以前の更新は各節と`docs/handoff/archive/`を参照。直近: 2026-11-05 向き補正の対照実験、2026-11-04 FAX帳票の向き補正をkanameoneへ反映、2026-10-29 画面上の「顧客」を「利用者」に統一)
+**更新日**: 2026-11-12(複数名が載るFAXの手動複製ボタンを実装。先方が仕様案と同姓同名の進め方を了承し、同姓同名の確認にも回答。実装は feature ブランチ`feature/manual-fax-duplication`でコミット済み・未push。以前の更新は各節と`docs/handoff/archive/`を参照。直近: 2026-11-11 仕様案と調査結果の送付、2026-11-05 向き補正の対照実験、2026-11-04 FAX帳票の向き補正をkanameoneへ反映)
 
-## 複数名が載るFAXの手動複製ボタン(仕様案)と、同姓同名の調査(2026-11-11、ADR-0032・Proposed)
+## 複数名が載るFAXの手動複製ボタンを実装(2026-11-12、ADR-0032・Accepted、feature ブランチ・PR前)
+
+### 経緯
+- 先方(かなめ様、窓口の担当者経由、決裁者が転送)が2026-11-12に、複数名FAXの対応と同姓同名の進め方の両方を「いただいた内容でお願いします」と了承。同姓同名の確認3点にも回答した(下の「同姓同名」)。
+- 承認済み計画(`/Users/yyyhhh/.claude/plans/bubbly-swimming-hopcroft.md`、要点はADR-0032に転記済み)のとおり、テスト先行で型→BE→FEの順に実装した。
+
+### 結果
+- **ブランチ**: `feature/manual-fax-duplication`(コミット3本。未push・PR未作成)。`git diff main...HEAD --stat`は18ファイル・約2650行。
+- **BE**: onCall `duplicateDocumentForCustomers`(`functions/src/documents/duplicateDocumentForCustomers.ts`)と純粋関数(`manualDuplicationBuilder.ts`)。複製docのIDは`{元docId}_dup_{customerId}`、グループ合計5名の上限はトランザクション内で強制、複製の中身は許可リスト方式。元の書類は`distributionId`の付与のみ。OCR全文は`ocr-results/{複製docId}/`へコピーし、書き込み失敗時は補償削除(採用済みなら消さない)。メンテナンスゲート・認可は`splitPdf`と同じ。
+- **FE**: `DuplicateDocumentModal`(OCR完全一致候補+マスター検索、1回4名まで、同姓同名は区別用メモと担当ケアマネで見分け)、`useDuplicateDocument`、詳細画面ヘッダーの「他の利用者用に複製」ボタン(処理完了・非分割元のみ、編集中は無効)。型・上限定数は`shared/types.ts`でFE/BEが共有。
+- **CI**: `ci.yml`に統合テストの専用stepを追加(`functions/package.json`の`test:integration`にも追加)。
+- **文書**: ADR-0032(Accepted、「実装時の確認結果」を追記)、`docs/context/data-model.md`、`docs/operation/user-guide.md`、`docs/api-reference.md`。
+
+### 検証(2026-11-12、最終コードで再実行)
+- functions: `tsc --noEmit` 終了0、`npm test`(Node 20)2596件pass・0件fail(6 pendingは既存)、新しい統合テスト(`firebase emulators:exec --only firestore`)44件pass。
+- frontend: `tsc --noEmit` 終了0、vitest 66ファイル/1028件pass、`npm run lint` 終了0(既存の警告1件)。
+- **実画面(ローカルemulator+vite+Playwright MCP、本番・devには触れていない)**: 候補欄・検索・同姓同名の見分け・2名複製・同じ人の再選択(すでに作成済み)・未確定の元の書類の拒否・モバイル幅375pxを確認。複製docはemulatorのFirestoreをREST取得して、ID・利用者・`verified:false`・`processedAt`・`totalPages`・`displayFileName`・写さない項目の不在・`detail/main`の複製・元の書類の不変を照合した。詳細画面の「同一FAXをN名に配信」は複製後に更新される(兄弟数のキャッシュ無効化)。
+- **codex review 2回(1ブランチ上限)**: 1回目の指摘2件を検証して反映(P2=未確定の元の書類の複製を拒否、P3=兄弟数のキャッシュ無効化)。2回目の結果は下の「2回目のcodex review」に記載。
+- 注意: コミット後のhook(`PostToolUse`)のtest stepは、既定のNode v26でmochaが起動できず(`require is not defined in ES module scope`)失敗表示になる。コードの問題ではなく環境の問題(Node 20で全件passを別途確認済み)。hookは変更していない。
+
+### 実画面の確認で見つかった問題(統合テストでは見えなかった)
+- functions emulatorのランタイムは`admin.firestore`をスタブ化し、`admin.firestore.FieldValue`が`undefined`になる。複製の呼び出しが500で失敗した。他モジュール(`masterOperations.ts`等)と同じモジュラー形式(`import { FieldValue } from 'firebase-admin/firestore'`)に直して解消。統合テストは`executeManualDuplication`を直接呼ぶためonCall経路のemulatorランタイムを通らなかった。
+
+### 実装で分かった制約(先方への説明・運用に関わる)
+- **加工済み(`processed/`配下)PDFを元にした複製は回転できない**(`provenance`が無く`original/`でもないため、既存のゲートが拒否)。受信原本(`original/`)なら回転できる。運用は「回転が必要なら複製の前に元の書類を回転する」。`provenance`を写す案は、ADR-0016の整合性を崩すため採らなかった。
+- **元の書類は`customerConfirmed===true`が必須**(Drive出力のゲートより厳しい)。OCRが曖昧で未確定のまま残った書類は、詳細画面で利用者を確定してから複製する。
+- **同姓同名マスターがあるとOCRは先頭のマスターを自動で入れるが、必ず未確定になる**(実関数を架空データで実測、`isDuplicate`フラグの有無によらない)。先方へ説明済みの内容と一致。
+- 複製は要約を写さない(元の利用者名を含みうるため)。必要なら複製した書類で手動で再生成する。
+- 補償削除の理論上の限界: 同じ複製を同時に実行した2つの呼び出しの片方だけがFirestoreの書き込みで失敗すると、相手のコピーを消す余地がある(ADR-0032)。実害が出たら、削除せず孤児として残す方式へ変える。
+
+### 同姓同名(先方の回答、2026-11-12。実名・IDは公開リポジトリのため書かない)
+- 利用者A: 先方の読みは「担当ケアマネXが1件・Yが2件、Yの2件は同一人物。区別用メモに入力があるほうへ合算してほしい」。**こちらの2026-11-10の確認(担当が同じ2件が二重登録の疑い・もう1件は別)とXとYの対応が食い違う**。
+- 利用者B: 先方は「現在は担当ケアマネPとQの2件。CSVインポートで変わった可能性がある。契約終了はPの担当に行い、一度解除してから再び契約終了にした(約1週間前)」。**こちらの確認(2件とも同じ担当・契約終了なし・Qの担当は無い)と食い違う**(確認後に状況が変わった可能性)。
+- **未実施**: 統合の前に、現状のマスターを読み取りで再確認する必要がある。**今回のセッションではkanameoneの本番マスターの読み取りが自動モードの判定(Production Reads)で拒否され、実施できなかった**(迂回せず停止。`switch-client.sh kanameone`で構成を切り替えたが、読み取りは行われていない。構成はdevへ戻し済み)。統合は書類の付け替えを伴うため、読み取りの結果を示したうえで番号単位の承認後に実行する。既存の`merge-notation-duplicate-masters.ts`は、完全一致の同姓同名グループを丸ごと対象外にするため流用できない。
+
+### 次のアクション
+- (AI即着手可) push→PR作成→CI確認→`ui-verified`ラベル(PRにローカルemulatorでの確認結果を記録)→マージは`PRマージ`のAskUserQuestion承認。
+- マージ後: devで実画面+Driveの利用者別フォルダ出力を確認→kanameoneへ反映(`/deploy`、番号単位の承認)。
+- 先方への完了報告(決裁者が送付)に添える点: 回転は複製の前に/元の書類の利用者が確定していないと複製できない/同姓同名は片方が自動で入っても確定するまで未確定。
+- 同姓同名の整理: 上記の読み取りの許可(または別経路の指示)が前提。
+
+## 複数名が載るFAXの手動複製ボタン(仕様案)と、同姓同名の調査(2026-11-11、ADR-0032。のちにAccepted)
 
 ### 経緯
 - 先方(かなめ様、窓口の担当者経由)から2点の依頼(2026-11-10)。①福祉用具貸与事業所の提供表が最大3名分で1枚のFAXに載る。複製して、利用者ごとにアプリ上で見え、それぞれのフォルダに保存したい(分割より複製の方がシンプルと想定)。仕様を決めてからかなめ様に報告し、着手する流れ。②同姓同名の問題: 利用者のマスターが想定より多い、別のケアマネ担当の同名の方を契約終了にした影響が疑われる、区別用メモを入力しないと同一人物扱いになるのか。
