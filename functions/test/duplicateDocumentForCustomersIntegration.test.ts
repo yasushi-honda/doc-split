@@ -325,6 +325,24 @@ describe('duplicateDocumentForCustomers 統合テスト (ADR-0032)', () => {
       await expectHttpsError(() => run(['c-a']), 'failed-precondition');
     });
 
+    // 再解析の保護(confirmedFieldMerge)は customerConfirmed === true の書類にしか効かない。
+    // 同名衝突が無くても未確定の元の書類を複製すると、distributionId を付けた後の再解析で
+    // 元の利用者が書き換わりうる(codex review P2)ため、人またはOCRの確定を必須にする。
+    for (const [label, overrides] of [
+      ['customerConfirmed が false', { customerConfirmed: false }],
+      ['customerConfirmed が未設定', { customerConfirmed: undefined }],
+    ] as const) {
+      it(`同名衝突が無くても、${label}の元の書類は複製できない(failed-precondition・何も作られない)`, async () => {
+        const data = sourceDocData(overrides);
+        if (overrides.customerConfirmed === undefined) delete data.customerConfirmed;
+        await db.doc('documents/src1').set(data);
+        await db.doc('documents/src1/detail/main').set({ ocrResult: 'x', pageResults: [] });
+        await expectHttpsError(() => run(['c-a']), 'failed-precondition');
+        expect(await countDocuments()).to.equal(1);
+        expect((await db.doc('documents/src1').get()).data()).to.not.have.property('distributionId');
+      });
+    }
+
     it('同姓同名のマスターがあり、人が確定していない → failed-precondition', async () => {
       await seedCustomer('c-src-twin', 'テスト太郎', '担当別');
       await seedSource({ customerConfirmed: false });

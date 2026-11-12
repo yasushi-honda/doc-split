@@ -26,6 +26,9 @@ function invalidateDuplicateQueries(queryClient: QueryClient): void {
   markDocumentsInfiniteStale(queryClient)
   // 元の書類に distributionId が付くため、詳細も更新する
   queryClient.invalidateQueries({ queryKey: ['document'] })
+  // 詳細画面の「同一FAXをN名に配信」の人数。staleTime(30秒)内は再取得されないため、
+  // 既存グループへ追加した後も古い人数が残らないよう無効化する(codex review P3)
+  queryClient.invalidateQueries({ queryKey: ['distributionSiblingCount'] })
   // 利用者別・担当CM別のグループ表示に新しい書類が現れる
   invalidateGroupQueries(queryClient)
 }

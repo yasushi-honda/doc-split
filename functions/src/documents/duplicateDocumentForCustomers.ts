@@ -125,6 +125,15 @@ export async function executeManualDuplication(params: {
         throw new HttpsError('failed-precondition', '分割元の書類は複製できません');
       }
 
+      // 元の書類の利用者は、人またはOCRが確定済み(customerConfirmed === true)であること。
+      // distributionId を付けた後の再解析で元の利用者が保持されるのは、確定済みの書類だけ
+      // (confirmedFieldMerge の保護は customerConfirmed === true にしか効かない)。未確定のまま
+      // 複製すると、再解析で元の利用者が書き換わり、既に複製した利用者と重なりうる。
+      // Drive出力のゲート(下の isCustomerUnconfirmed)は「同名衝突が無ければ通す」ため、それより厳しい。
+      if (source.customerConfirmed !== true) {
+        throw new HttpsError('failed-precondition', '元の書類の利用者が確定していません。先に利用者を決めてください');
+      }
+
       const sourceCustomerId =
         typeof source.customerId === 'string' && source.customerId !== '' ? source.customerId : null;
 
