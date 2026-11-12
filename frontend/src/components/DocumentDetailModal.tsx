@@ -1098,6 +1098,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       size="sm"
                       onClick={() => setIsDuplicateModalOpen(true)}
                       disabled={isEditing}
+                      aria-label="他の利用者用に複製"
+                      title="他の利用者用に複製"
                       className="text-teal-700 border-teal-300 hover:bg-teal-50 disabled:opacity-40"
                     >
                       <Copy className="h-4 w-4 sm:mr-1" />

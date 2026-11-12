@@ -16,6 +16,7 @@
  */
 
 import * as admin from 'firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { isCustomerUnconfirmed } from '../drive/customerAmbiguityGate';
 import { copyOcrResultForDistributionMember } from '../ocr/ocrProcessor';
@@ -206,7 +207,9 @@ export async function executeManualDuplication(params: {
       }
 
       // ---- 書き込み ----
-      const serverTimestamp = admin.firestore.FieldValue.serverTimestamp();
+      // Functions emulator は admin.firestore をスタブ化し FieldValue が undefined になるため、
+      // 他のモジュール(masterOperations.ts 等)と同じモジュラー形式の FieldValue を使う
+      const serverTimestamp = FieldValue.serverTimestamp();
       const detailData = detailSnap.exists
         ? (detailSnap.data() as Record<string, unknown>)
         : legacyDetailFromBody(source);
