@@ -35,6 +35,9 @@ conditions:
       aggregations:
         - alignmentPeriod: 60s
           perSeriesAligner: ALIGN_COUNT
+          # リビジョン単位の系列を1本に束ねる(groupByFields空)。束ねないと、デプロイで
+          # 旧リビジョンの系列が途絶えた時に、旧系列だけが「欠落」と判定され誤発火する
+          crossSeriesReducer: REDUCE_SUM
       duration: 1200s
 alertStrategy:
   autoClose: 86400s
