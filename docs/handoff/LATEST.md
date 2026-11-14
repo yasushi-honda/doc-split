@@ -1,6 +1,27 @@
 # ハンドオフメモ
 
-**更新日**: 2026-11-13(**利用者Bの書類42件を契約中のマスターへ付け替え済み(決裁者の承認・独立再読み取りで確認)。CSV取込の二重登録の修正(PR #1231)をマージし、devの実画面確認・kanameone反映まで完了**。2026-11-12: 複数名が載るFAXの手動複製ボタンを実装し、PR #1227をマージ、dev検証・kanameone反映まで完了。利用者Aの同姓同名マスターを統合。マニュアル・アプリ内ヘルプを更新(PR #1228)。利用者Bで「契約終了のマスターに契約中の方の書類42件が紐づき一覧に出ない」原因を特定し、契約終了の非表示ルールを修正(PR #1229、kanameone反映済み)。利用者Bの書類の付け替えは2026-11-13に実施。先方が仕様案と同姓同名の進め方を了承し、同姓同名の確認にも回答。以前の更新は各節と`docs/handoff/archive/`を参照。直近: 2026-11-11 仕様案と調査結果の送付、2026-11-05 向き補正の対照実験、2026-11-04 FAX帳票の向き補正をkanameoneへ反映)
+**更新日**: 2026-11-14(**`processocr_stalled`アラートの誤発火(リビジョン切替で旧系列だけ欠落と判定)の原因を特定し、テンプレート修正(PR #1235)をマージ、dev・kanameoneのポリシーへ適用済み**。2026-11-13: **利用者Bの書類42件を契約中のマスターへ付け替え済み(決裁者の承認・独立再読み取りで確認)。CSV取込の二重登録の修正(PR #1231)をマージし、devの実画面確認・kanameone反映まで完了**。2026-11-12: 複数名が載るFAXの手動複製ボタンを実装し、PR #1227をマージ、dev検証・kanameone反映まで完了。利用者Aの同姓同名マスターを統合。マニュアル・アプリ内ヘルプを更新(PR #1228)。利用者Bで「契約終了のマスターに契約中の方の書類42件が紐づき一覧に出ない」原因を特定し、契約終了の非表示ルールを修正(PR #1229、kanameone反映済み)。利用者Bの書類の付け替えは2026-11-13に実施。先方が仕様案と同姓同名の進め方を了承し、同姓同名の確認にも回答。以前の更新は各節と`docs/handoff/archive/`を参照。直近: 2026-11-11 仕様案と調査結果の送付、2026-11-05 向き補正の対照実験、2026-11-04 FAX帳票の向き補正をkanameoneへ反映)
+
+## `processocr_stalled`アラートの誤発火を修正(2026-11-14、PR #1235マージ済み・dev/kanameoneのポリシーへ適用済み)
+
+### 経緯
+- 2026-11-14 17:35 JSTに、kanameoneの`processocr_stalled`が「復旧」したメールが届いた(開始2026-11-12 08:57 UTC、継続約47時間)。実際にOCRが止まっていたかを確認した。
+
+### 結果(原因)
+- **OCR処理は止まっていなかった(誤検知)**。`OCR processing (polling) completed`は毎時約60件で途切れず、ERRORログは0件(11/10〜11/14の4日分)。
+- 2026-11-12 08:31 UTCにリビジョンが`processocr-00097-cor`→`-00098-qin`へ切り替わった。ポリシー(`conditionAbsent`)に`groupByFields`・`crossSeriesReducer`がなく、リビジョン別の系列が個別に監視されていたため、途絶えた旧系列だけが「欠落」と判定され、26分後(しきい値20分の直後)に発火した。
+- devのインシデント履歴の直近50件も全てリビジョン名つきで約2日続いて閉じており、リビジョン切替のたびに同じ誤発火が起きていた構造。
+- **未解明**: 継続が約47時間で、ポリシーの`autoClose: 86400s`(24時間)より長い理由。
+
+### 対応
+- **PR #1235**(マージ済み、`6c0e724b`): `scripts/monitoring-templates/alert-processocr-stalled.yaml`の`aggregations`に`crossSeriesReducer: REDUCE_SUM`(`groupByFields`空)を追加し、系列を1本に束ねた。`docs/context/monitoring-setup.md`に注記。
+- **dev**: ポリシーを更新(`REDUCE_SUM`付きabsence条件をAPIが受理)。devのprocessocrをno-opでリビジョン切替(09:16 UTC)し、旧ポリシーなら発火する09:36 UTCを過ぎた09:45 UTCに新規インシデントが立たないことを確認(1回のみの観測)。
+- **kanameone**: 決裁者の番号単位の承認後に更新。現行定義を退避→完全な定義で更新→`describe`で更新前と全項目(通知チャネル・`alertStrategy`・`userLabels`・`enabled`・`combiner`・`displayName`・`documentation`)が一致することを確認。cocoroは停止中のため対象外。
+- **手順ミス(dev・数十秒)**: `--policy-from-file`は書かなかったフィールドを消す。devの最初の更新で通知チャネル・`alertStrategy`・`userLabels`を消してしまい、同じdevの別ポリシーの通知チャネルとテンプレート値で復元した(復元前の元のチャネルは未確認、同一と推定)。kanameoneでは現行定義を退避し完全な定義を渡して再発させなかった。
+- **main push後のCIが1回failure**: `scripts/executeSiblingMerge.integration.test.ts`でNodeのテストランナー内部エラー(`Unable to deserialize cloned data due to invalid or unsupported version`、assertion失敗ではない)。同じ内容のPR側CIはpass。`gh run rerun --failed`の1回の再実行でsuccess。再発するようなら別途原因を確認する。
+
+### 同根再発・対症療法の確認
+- 同根候補: 過去のhandoffに`processocr_stalled`の誤発火の記録なし(dev履歴の過去分は同じ構造の再発で、今回の原因に含まれる)。対症療法ではなく、系列の束ね方(構造)の修正。外部要因ではなくポリシー定義の問題と、dev履歴・リビジョン名・時刻の一致で確認済み。
 
 ## 複数名が載るFAXの手動複製ボタンを実装(2026-11-12、ADR-0032・Accepted、マージ済み・dev検証済み・kanameone反映済み)
 
@@ -137,7 +158,7 @@
 
 ## 次のアクション（3 分割・SKILL.md §2.5 参照、2026-11-13時点）
 
-**即着手タスクなし(executor領分の作業ゼロ)。条件待ち10件。却下候補あり。**
+**即着手タスクなし(executor領分の作業ゼロ)。条件待ち11件。却下候補あり。**
 
 ### 即着手タスク
 
@@ -157,6 +178,7 @@
 | 8 | 大判PDF・多ページPDFの不安定化 | 大判PDFの`error`・503、または書類が`error`化、または同種ERRORの複数回再発 | 原因確認。PDFのdpi変更はgolden再現性に影響するため決裁者判断。メモリ8GiB化の再検討 | `paddle-ocr`/`processocr`のERROR(両方、期間明示)、メモリ使用率(max) |
 | 9 | kanameone Drive Phase1の残り | クライアントの返信・入力 | `drive-export-status-report --breakdown`の件数のみ確認 | status-report |
 | 10 | 先方から「顧客」の文字が残る箇所の連絡 | かなめ様からの連絡 | 画面名を特定し、`customerName`の出力箇所の追跡で原因を確認して修正 | decision-makerからの転送 |
+| 11 | `processocr_stalled`の誤発火解消の本番確認(PR #1235) | 次回、kanameoneでprocessocrのリビジョンが切り替わるデプロイ(Functions反映)があった時 | 反映の約30分後に、`monitoring v3 alerts`で`processocr_stalled`の新規インシデントが立っていないことを読み取りで確認。立っていれば原因を再調査(`autoClose`の47時間の件も含む) | `curl`でMonitoring APIの`alerts`(ポリシー名で絞り込み、`orderBy=open_time desc`)、またはメールの有無 |
 
 ### 却下候補（記録のみ）
 
@@ -173,6 +195,7 @@
 | 9 | CSV取込モーダル(`CsvImportModal.tsx`)との結合テスト | 新規価値創出 | `.tsx`のテストになり`ui-verified`の対象に変わる。dev実画面で確認済みのため見送り |
 | 10 | 契約終了の非表示ルールと同姓同名の例外(PR #1229)・CSV取込の照合(PR #1231)のADR化 | 整理・点検 | 内容はコードのコメント・LATEST.md・GOAL.mdに記録済み。要ADR判断(軽微)はdecision-makerの判断 |
 | 11 | 同名のマスターを氏名で1件に畳む箇所の棚卸し、OCRの同名先頭採用の見直し | 新規価値創出 | 下の「同根再発スキャン」参照。設計判断はdecision-maker領分で、起点なし |
+| 12 | `setup-log-based-metrics.sh`に既存アラートポリシーの差分更新経路を足す | 新規価値創出 | スクリプトは既存ポリシーをskipするため、テンプレート変更が既存環境へ反映されない(今回は手作業で更新)。ただし設計から必要で規模が大きく、決裁者の起点指示がない。ポリシー変更が再び必要になった時に再検討 |
 
 ### 同根再発スキャンと対症療法判定（§4.6・§4.7、2026-11-13）
 
