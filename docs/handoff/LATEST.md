@@ -16,6 +16,7 @@
 ### 対応
 - **PR #1235**(マージ済み、`6c0e724b`): `scripts/monitoring-templates/alert-processocr-stalled.yaml`の`aggregations`に`crossSeriesReducer: REDUCE_SUM`(`groupByFields`空)を追加し、系列を1本に束ねた。`docs/context/monitoring-setup.md`に注記。
 - **dev**: ポリシーを更新(`REDUCE_SUM`付きabsence条件をAPIが受理)。devのprocessocrをno-opでリビジョン切替(09:16 UTC)し、旧ポリシーなら発火する09:36 UTCを過ぎた09:45 UTCに新規インシデントが立たないことを確認(1回のみの観測)。
+- **dev(検知力の維持の確認、2026-11-14)**: 修正後も本当の停止を検知できるかを確認した。devの`firebase-schedule-processOCR-asia-northeast1`(元の状態はENABLED)を14:20:38Zに一時停止し、約26分後の14:46:40Zに新規インシデントが`OPEN`で立った(リビジョン名なし=系列が1本に束ねられた状態で発火)。再開(16:07Z)の約4分後の16:11:19Zに`CLOSED`、ログも再開。Schedulerは`ENABLED`に戻した。**停止は予定の約25分ではなく約1時間47分になった**(待機コマンドが想定より長引いた原因は未確認、dev・実データなしで実害なし)。再開後は約4分で閉じており、前回の約47時間と違うのは旧系列が戻らなかったためという仮説は未検証。
 - **kanameone**: 決裁者の番号単位の承認後に更新。現行定義を退避→完全な定義で更新→`describe`で更新前と全項目(通知チャネル・`alertStrategy`・`userLabels`・`enabled`・`combiner`・`displayName`・`documentation`)が一致することを確認。cocoroは停止中のため対象外。
 - **手順ミス(dev・数十秒)**: `--policy-from-file`は書かなかったフィールドを消す。devの最初の更新で通知チャネル・`alertStrategy`・`userLabels`を消してしまい、同じdevの別ポリシーの通知チャネルとテンプレート値で復元した(復元前の元のチャネルは未確認、同一と推定)。kanameoneでは現行定義を退避し完全な定義を渡して再発させなかった。
 - **main push後のCIが1回failure**: `scripts/executeSiblingMerge.integration.test.ts`でNodeのテストランナー内部エラー(`Unable to deserialize cloned data due to invalid or unsupported version`、assertion失敗ではない)。同じ内容のPR側CIはpass。`gh run rerun --failed`の1回の再実行でsuccess。再発するようなら別途原因を確認する。
